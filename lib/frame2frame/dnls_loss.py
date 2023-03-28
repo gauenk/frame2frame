@@ -48,6 +48,8 @@ logging.basicConfig()
 
 # -- lightning module --
 import torch
+import torch as th
+import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning import Callback
 from pytorch_lightning.loggers import CSVLogger
@@ -67,7 +69,8 @@ class DnlsLoss(nn.Module):
         wr,kr = 1,1.
         self.refine = dnls.search.RefineSearch(ws,wt,ps,k,wr,kr,nheads=1,
                                                dist_type="l2",stride0=stride0)
-        self.search_input = "noisy"
+        self.search_input = search_input
+        self.alpha = alpha
 
     def get_search_vid(self,noisy,deno):
         srch = None
@@ -75,7 +78,7 @@ class DnlsLoss(nn.Module):
             srch = noisy
         elif self.search_input == "deno":
             srch = deno
-        elif self.search_input = "interp":
+        elif self.search_input == "interp":
             srch = self.alpha * noisy + (1 - self.alpha) * deno
         else:
             raise ValueError(f"Uknown search video [{self.search_input}]")
@@ -84,7 +87,7 @@ class DnlsLoss(nn.Module):
     def compute_loss(self,dists):
         if self.crit == "l1":
             return th.mean(th.sqrt(dists))
-        elif self.crit = "l2"
+        elif self.crit == "l2":
             return th.mean(dists)
         else:
             raise ValueError(f"Uknown criterion [{self.crit}]")

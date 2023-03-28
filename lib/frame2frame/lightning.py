@@ -78,7 +78,7 @@ def lit_pairs():
              "scheduler":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"k":5,"stride0":4,"dist_crit":"l2",
-             "search_input":"interp","alpha":0.5}
+             "search_input":"interp","alpha":0.5,"crit_name":"warped"}
     return pairs
 
 def sim_pairs():
@@ -111,8 +111,11 @@ class LitModel(pl.LightningModule):
         self.automatic_optimization=True
 
     def forward(self,vid):
-        flows = flow.orun(vid,self.flow,ftype=self.flow_method)
-        deno = self.net(vid,flows=flows)
+        # flows = flow.orun(vid,self.flow,ftype=self.flow_method)
+        B = vid.shape[0]
+        batch = rearrange(vid,'b t c h w -> (b t) c h w')
+        deno = self.net(batch)#,flows=flows)
+        deno = rearrange(deno,'(b t) c h w -> b t c h w',b=B)
         return deno
 
     def sample_noisy(self,batch):
@@ -231,7 +234,7 @@ class LitModel(pl.LightningModule):
     def init_crit(self):
         if self.crit_name == "warped":
             return WarpedLoss()
-        else:
+        elif self.crit_name == "dnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
                             self.crit,self.search_input,self.alpha)
         else:

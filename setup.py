@@ -19,7 +19,7 @@ long_description="""Unsup Training with Video"""
 setup(
     name='frame2frame',
     version='100.100.100',
-    description='Frame2Frame Training Wrap',
+c    description='Frame2Frame Training Wrap',
     long_description=long_description,
     url='https://github.com/gauenk/apsearch',
     author='Kent Gauen',

@@ -48,6 +48,8 @@ logging.basicConfig()
 
 # -- lightning module --
 import torch
+import torch as th
+import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning import Callback
 from pytorch_lightning.loggers import CSVLogger
