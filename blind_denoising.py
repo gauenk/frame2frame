@@ -88,7 +88,7 @@ class WarpedLoss(nn.Module):
         a = np.zeros(warped.size())
         b = np.zeros(warped.size())
 
-        # Compute an occlusion based on the divergence of the optical flow 
+        # Compute an occlusion based on the divergence of the optical flow
         a[:, :, :-1, :] = (of[0, 0, 1:, :] - of[0, 0, :-1, :])
         b[:, :, :, :-1] = (of[0, 1, :, 1:] - of[0, 1, :, :-1])
         mask = np.abs(a + b) > 0.75

@@ -17,6 +17,7 @@ class DnCNN(nn.Module):
             layers.append(nn.ReLU(inplace=True))
         layers.append(nn.Conv2d(in_channels=features, out_channels=channels, kernel_size=kernel_size, padding=padding, bias=False))
         self.dncnn = nn.Sequential(*layers)
+
     def forward(self, x):
         out = self.dncnn(x)
-        return out
+        return x-out

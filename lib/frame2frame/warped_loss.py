@@ -7,6 +7,7 @@ pp = pprint.PrettyPrinter(indent=4)
 import numpy as np
 import torch as th
 from einops import rearrange,repeat
+from torch.autograd import Variable
 
 # -- data mngmnt --
 from pathlib import Path
@@ -35,6 +36,9 @@ from dev_basics.utils.metrics import compute_psnrs,compute_ssims
 from dev_basics.utils.timer import ExpTimer
 import dev_basics.utils.gpu_mem as gpu_mem
 
+# -- scikit-image --
+from scipy.ndimage.morphology import binary_dilation
+
 # -- noise sims --
 import importlib
 # try:
@@ -59,7 +63,8 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 class WarpedLoss(nn.Module):
     def __init__(self):
         super(WarpedLoss, self).__init__()
-        self.criterion = nn.L1Loss(size_average=False)
+        # self.criterion = nn.L1Loss(size_average=False)
+        self.criterion = nn.L1Loss()
 
     def warp(self, x, flo):
         """
@@ -100,13 +105,14 @@ class WarpedLoss(nn.Module):
         of: [B, 2, H, W] flow
         old_mask: [B, C, H, W] first estimate of the mask
         """
-        a = np.zeros(warped.size())
-        b = np.zeros(warped.size())
+        a = th.zeros_like(warped)
+        b = th.zeros_like(warped)
 
-        # Compute an occlusion based on the divergence of the optical flow 
+        # Compute an occlusion based on the divergence of the optical flow
         a[:, :, :-1, :] = (of[0, 0, 1:, :] - of[0, 0, :-1, :])
         b[:, :, :, :-1] = (of[0, 1, :, 1:] - of[0, 1, :, :-1])
-        mask = np.abs(a + b) > 0.75
+        mask = th.abs(a + b) > 0.75
+        mask = mask.cpu().numpy()
 
         # Dilates slightly the occlusion map to be more conservative
         ball = np.zeros((3, 3))
@@ -128,10 +134,36 @@ class WarpedLoss(nn.Module):
         return mask
 
     def forward(self, input, target, flow):
+        # noisy, deno, flow (deno -> noisy)
         # Warp input on target
         warped, mask = self.warp(target, flow)
         # Compute the occlusion mask
         mask = self.occlusion_mask(warped, flow, mask)
         # Compute the masked loss
-        self.loss = self.criterion(mask*input, mask*warped)
-        return self.loss
+        loss = self.criterion(mask*input, mask*warped)
+        # loss = th.mean((mask*input - mask*warped)**2)
+        return loss
+
+    def run_pairs(self,deno,noisy,flows):
+
+        # -- unpack --
+        # deno = rearrange(deno,'b t c h w -> (b t) c h w')
+        # noisy = rearrange(noisy,'b t c h w -> (b t) c h w')
+        # fflow = rearrange(flows.fflow,'b t c h w -> (b t) c h w')
+        # bflow = rearrange(flows.bflow,'b t c h w -> (b t) c h w')
+
+        # Computes an occlusion mask based on the optical flow
+        # warped: [B, C, H, W] warped frame (only used for size)
+        # of: [B, 2, H, W] flow
+        # old_mask: [B, C, H, W] first estimate of the mask
+        T = deno.shape[1]
+        loss = 0
+        for t in range(1,T):
+            loss += self.forward(noisy[:,t-1],deno[:,t],flows.bflow[:,t])
+        for t in range(T-1):
+            loss += self.forward(noisy[:,t+1],deno[:,t],flows.fflow[:,t])
+        loss /= 2*(T-1)
+        return loss
+
+
+

@@ -63,16 +63,18 @@ class DnlsLoss(nn.Module):
 
     def __init__(self,ws, wt, ps, k, stride0, dist_crit="l1",
                  search_input="noisy", alpha = 0.5):
-        super(WarpedLoss, self).__init__()
+        super().__init__()
         self.search = dnls.search.NonLocalSearch(ws,wt,ps,k,nheads=1,
-                                                 dist_type="l2",stride0=stride0)
+                                                 dist_type="l2",stride0=stride0,
+                                                 anchor_self=True)
         wr,kr = 1,1.
-        self.refine = dnls.search.RefineSearch(ws,wt,ps,k,wr,kr,nheads=1,
+        self.refine = dnls.search.RefineSearch(ws,ps,k,wr,kr,nheads=1,
                                                dist_type="l2",stride0=stride0)
         self.search_input = search_input
         self.alpha = alpha
+        self.dist_crit = dist_crit
 
-    def get_search_vid(self,noisy,deno):
+    def get_search_video(self,noisy,deno):
         srch = None
         if self.search_input == "noisy":
             srch = noisy
@@ -85,9 +87,9 @@ class DnlsLoss(nn.Module):
         return srch
 
     def compute_loss(self,dists):
-        if self.crit == "l1":
-            return th.mean(th.sqrt(dists))
-        elif self.crit == "l2":
+        if self.dist_crit == "l1":
+            return th.mean(th.abs(dists))
+        elif self.dist_crit == "l2":
             return th.mean(dists)
         else:
             raise ValueError(f"Uknown criterion [{self.crit}]")
@@ -96,6 +98,6 @@ class DnlsLoss(nn.Module):
         srch = self.get_search_video(noisy,deno)
         _,inds = self.search(srch,srch,flows.fflow,flows.bflow)
         dists,_ = self.refine(noisy,noisy,inds)
-        loss = self.compute_loss(dists)
-        return self.loss
+        loss = self.compute_loss(dists[...,1:])
+        return loss
 

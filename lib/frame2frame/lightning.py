@@ -78,7 +78,8 @@ def lit_pairs():
              "scheduler":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"k":5,"stride0":4,"dist_crit":"l2",
-             "search_input":"interp","alpha":0.5,"crit_name":"warped"}
+             "search_input":"interp","alpha":0.5,"crit_name":"warped",
+             "read_flows":False}
     return pairs
 
 def sim_pairs():
@@ -213,20 +214,28 @@ class LitModel(pl.LightningModule):
         # -- unpack batch
         noisy = batch['noisy'][start:stop]/255.
         clean = batch['clean'][start:stop]/255.
-        # print("noisy.shape: ",noisy.shape)
+
+        # -- if read flow --
+        # print(noisy.shape,batch['fflow'].shape,self.read_flows)
+        if self.read_flows:
+            flows = edict({"fflow":batch['fflow'],"bflow":batch["bflow"]})
+        elif self.flow:
+            flows = flow.orun(noisy,self.flow,ftype=self.flow_method)
+        else:
+            raise ValueError("Must get flow. Either flow or read_flows must be true.")
 
         # -- foward --
         deno = self.forward(noisy)
 
         # -- report loss --
-        loss = th.mean((clean - deno)**2)
+        loss = self.compute_loss(clean,noisy,deno,flows)
         return deno.detach(),clean,loss
 
-    def compute_loss(clean,noisy,deno,flows):
+    def compute_loss(self,clean,noisy,deno,flows):
         if self.crit_name == "warped":
             loss = self.crit.run_pairs(deno,noisy,flows)
         elif self.crit_name == "dnls":
-            loss = self.crit.run_pairs(deno,noisy,flows)
+            loss = self.crit(deno,noisy,flows)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
         return loss
@@ -236,7 +245,7 @@ class LitModel(pl.LightningModule):
             return WarpedLoss()
         elif self.crit_name == "dnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
-                            self.crit,self.search_input,self.alpha)
+                            self.dist_crit,self.search_input,self.alpha)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
 
