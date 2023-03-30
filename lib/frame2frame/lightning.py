@@ -236,6 +236,8 @@ class LitModel(pl.LightningModule):
             loss = self.crit.run_pairs(deno,noisy,flows)
         elif self.crit_name == "dnls":
             loss = self.crit(deno,noisy,flows)
+        elif self.crit_name == "sup":
+            loss = self.crit(clean,noisy)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
         return loss
@@ -246,6 +248,15 @@ class LitModel(pl.LightningModule):
         elif self.crit_name == "dnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha)
+        elif self.crit_name == "sup":
+            def sup(clean,noisy):
+                if self.dist_crit == "l1":
+                    return th.mean(th.abs(clean - noisy))
+                elif self.dist_crit == "l2":
+                    return th.mean((clean - noisy)**2)
+                else:
+                    raise ValueError(f"Uknown dist_crit [{dist_crit}]")
+            return sup
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
 
