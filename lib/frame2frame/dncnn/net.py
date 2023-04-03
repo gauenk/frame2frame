@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from einops import rearrange
 
 
 class DnCNN(nn.Module):
@@ -17,7 +18,19 @@ class DnCNN(nn.Module):
             layers.append(nn.ReLU(inplace=True))
         layers.append(nn.Conv2d(in_channels=features, out_channels=channels, kernel_size=kernel_size, padding=padding, bias=False))
         self.dncnn = nn.Sequential(*layers)
+        self.times = {}
 
-    def forward(self, x):
+    def forward(self, x, flows=None):
+        # -- vid to batch --
+        T = -1
+        if x.ndim == 5:
+            T = x.shape[1]
+            x = rearrange(x,'b t c h w -> (b t) c h w')
+
         out = self.dncnn(x)
+
+        # -- batch to vid --
+        if T != -1:
+            x = rearrange(x,'(b t) c h w -> b t c h w',t=T)
+
         return x-out

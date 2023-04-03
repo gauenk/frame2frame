@@ -56,19 +56,19 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
-# -- import dnls --
-import dnls
+# -- import stnls --
+import stnls
 
 class DnlsLoss(nn.Module):
 
     def __init__(self,ws, wt, ps, k, stride0, dist_crit="l1",
                  search_input="noisy", alpha = 0.5):
         super().__init__()
-        self.search = dnls.search.NonLocalSearch(ws,wt,ps,k,nheads=1,
+        self.search = stnls.search.NonLocalSearch(ws,wt,ps,k,nheads=1,
                                                  dist_type="l2",stride0=stride0,
                                                  anchor_self=True)
         wr,kr = 1,1.
-        self.refine = dnls.search.RefineSearch(ws,ps,k,wr,kr,nheads=1,
+        self.refine = stnls.search.RefineSearch(ws,ps,k,wr,kr,nheads=1,
                                                dist_type="l2",stride0=stride0)
         self.search_input = search_input
         self.alpha = alpha

@@ -39,7 +39,7 @@ import dev_basics.utils.gpu_mem as gpu_mem
 
 # -- losses --
 from .warped_loss import WarpedLoss
-from .dnls_loss import DnlsLoss
+from .stnls_loss import DnlsLoss
 
 # -- noise sims --
 import importlib
@@ -234,10 +234,10 @@ class LitModel(pl.LightningModule):
     def compute_loss(self,clean,noisy,deno,flows):
         if self.crit_name == "warped":
             loss = self.crit.run_pairs(deno,noisy,flows)
-        elif self.crit_name == "dnls":
+        elif self.crit_name == "stnls":
             loss = self.crit(deno,noisy,flows)
         elif self.crit_name == "sup":
-            loss = self.crit(clean,noisy)
+            loss = self.crit(clean,deno)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
         return loss
@@ -245,7 +245,7 @@ class LitModel(pl.LightningModule):
     def init_crit(self):
         if self.crit_name == "warped":
             return WarpedLoss()
-        elif self.crit_name == "dnls":
+        elif self.crit_name == "stnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha)
         elif self.crit_name == "sup":
