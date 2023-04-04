@@ -61,10 +61,11 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
 class WarpedLoss(nn.Module):
-    def __init__(self):
-        super(WarpedLoss, self).__init__()
+    def __init__(self,dist_crit="l2"):
+        super().__init__()
         # self.criterion = nn.L1Loss(size_average=False)
-        self.criterion = nn.L1Loss()
+        # self.criterion = nn.L1Loss()
+        self.dist_crit = dist_crit
 
     def warp(self, x, flo):
         """
@@ -140,9 +141,21 @@ class WarpedLoss(nn.Module):
         # Compute the occlusion mask
         mask = self.occlusion_mask(warped, flow, mask)
         # Compute the masked loss
-        loss = self.criterion(mask*input, mask*warped)
+        # loss = self.criterion(mask*input, mask*warped)
         # loss = th.mean((mask*input - mask*warped)**2)
+        loss = self.compute_loss((mask*input - mask*warped)**2)
         return loss
+
+    def compute_loss(self,dists):
+        if self.dist_crit == "l1":
+            eps = 1.*1e-3
+            loss = th.mean(th.sqrt(dists+eps))
+            return loss
+        elif self.dist_crit == "l2":
+            loss = th.mean(dists)
+            return loss
+        else:
+            raise ValueError(f"Uknown criterion [{self.crit}]")
 
     def run_pairs(self,deno,noisy,flows):
 
