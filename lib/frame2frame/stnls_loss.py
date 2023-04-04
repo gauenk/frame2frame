@@ -65,11 +65,12 @@ class DnlsLoss(nn.Module):
                  search_input="noisy", alpha = 0.5):
         super().__init__()
         self.search = stnls.search.NonLocalSearch(ws,wt,ps,k,nheads=1,
-                                                 dist_type="l2",stride0=stride0,
-                                                 anchor_self=True)
+                                                  dist_type="l2",stride0=stride0,
+                                                  anchor_self=True)
         wr,kr = 1,1.
         self.refine = stnls.search.RefineSearch(ws,ps,k,wr,kr,nheads=1,
-                                               dist_type="l2",stride0=stride0)
+                                                dist_type="l2",stride0=stride0,
+                                                anchor_self=True)
         self.search_input = search_input
         self.alpha = alpha
         self.dist_crit = dist_crit
@@ -88,7 +89,8 @@ class DnlsLoss(nn.Module):
 
     def compute_loss(self,dists):
         if self.dist_crit == "l1":
-            return th.mean(th.abs(dists))
+            eps = 1.*1e-4
+            return th.mean(th.sqrt(dists+eps))
         elif self.dist_crit == "l2":
             return th.mean(dists)
         else:
@@ -97,7 +99,7 @@ class DnlsLoss(nn.Module):
     def forward(self, noisy, deno, flows):
         srch = self.get_search_video(noisy,deno)
         _,inds = self.search(srch,srch,flows.fflow,flows.bflow)
-        dists,_ = self.refine(noisy,noisy,inds)
+        dists,_ = self.refine(deno,noisy,inds)
         loss = self.compute_loss(dists[...,1:])
         return loss
 
