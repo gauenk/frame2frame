@@ -100,7 +100,7 @@ class DnlsLoss(nn.Module):
 
     def forward(self, noisy, deno, flows):
         srch = self.get_search_video(noisy,deno)
-        print(srch.shape)
+        # print(srch.shape)
         _,inds = self.search(srch,srch,flows.fflow,flows.bflow)
         # print("deno [max,min]: ",th.max(deno).item(),th.min(deno).item())
         # print("deno [max,min]: ",th.max(noisy).item(),th.min(noisy).item())
