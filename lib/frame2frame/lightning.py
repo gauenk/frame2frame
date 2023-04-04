@@ -244,7 +244,7 @@ class LitModel(pl.LightningModule):
 
     def init_crit(self):
         if self.crit_name == "warped":
-            return WarpedLoss()
+            return WarpedLoss(self.dist_crit)
         elif self.crit_name == "stnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha)

@@ -89,8 +89,7 @@ class DnlsLoss(nn.Module):
 
     def compute_loss(self,dists):
         if self.dist_crit == "l1":
-            eps = 1.*1e-3
-            # print("dists [max,min]: ",th.max(dists).item(),th.min(dists).item())
+            eps = 1.*1e-6
             loss = th.mean(th.sqrt(dists+eps))
             return loss
         elif self.dist_crit == "l2":
