@@ -89,8 +89,8 @@ class DnlsLoss(nn.Module):
 
     def compute_loss(self,dists):
         if self.dist_crit == "l1":
-            eps = 1.*1e-4
-            return th.mean(th.sqrt(dists+eps))
+            eps = 1.*1e-3
+            return th.mean(th.sqrt(dists+eps**2))
         elif self.dist_crit == "l2":
             return th.mean(dists)
         else:
