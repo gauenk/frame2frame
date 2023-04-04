@@ -90,8 +90,8 @@ class DnlsLoss(nn.Module):
     def compute_loss(self,dists):
         if self.dist_crit == "l1":
             eps = 1.*1e-3
+            # print("dists [max,min]: ",th.max(dists).item(),th.min(dists).item())
             loss = th.mean(th.sqrt(dists+eps))
-            print(loss)
             return loss
         elif self.dist_crit == "l2":
             loss = th.mean(dists)
@@ -101,7 +101,10 @@ class DnlsLoss(nn.Module):
 
     def forward(self, noisy, deno, flows):
         srch = self.get_search_video(noisy,deno)
+        print(srch.shape)
         _,inds = self.search(srch,srch,flows.fflow,flows.bflow)
+        # print("deno [max,min]: ",th.max(deno).item(),th.min(deno).item())
+        # print("deno [max,min]: ",th.max(noisy).item(),th.min(noisy).item())
         dists,_ = self.refine(deno,noisy,inds)
         loss = self.compute_loss(dists[...,1:])
         return loss
