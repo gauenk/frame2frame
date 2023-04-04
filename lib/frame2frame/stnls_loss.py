@@ -90,9 +90,12 @@ class DnlsLoss(nn.Module):
     def compute_loss(self,dists):
         if self.dist_crit == "l1":
             eps = 1.*1e-3
-            return th.mean(th.sqrt(dists+eps**2))
+            loss = th.mean(th.sqrt(dists+eps))
+            print(loss)
+            return loss
         elif self.dist_crit == "l2":
-            return th.mean(dists)
+            loss = th.mean(dists)
+            return loss
         else:
             raise ValueError(f"Uknown criterion [{self.crit}]")
 
