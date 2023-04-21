@@ -40,6 +40,7 @@ import dev_basics.utils.gpu_mem as gpu_mem
 # -- losses --
 from .warped_loss import WarpedLoss
 from .stnls_loss import DnlsLoss
+from .nb2nb_loss import Nb2NbLoss
 
 # -- noise sims --
 import importlib
@@ -79,7 +80,9 @@ def lit_pairs():
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"k":5,"stride0":4,"dist_crit":"l2",
              "search_input":"interp","alpha":0.5,"crit_name":"warped",
-             "read_flows":False}
+             "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
+             "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.
+             "stnls_k_decay":1.}
     return pairs
 
 def sim_pairs():
@@ -110,6 +113,8 @@ class LitModel(pl.LightningModule):
         self.gen_loger = logging.getLogger('lightning')
         self.gen_loger.setLevel("NOTSET")
         self.automatic_optimization=True
+        choose_noise = data_hub.transforms.noise.choose_noise_transform
+        self.noise_sim = choose_noise(lit_cfg)
 
     def forward(self,vid):
         # flows = flow.orun(vid,self.flow,ftype=self.flow_method)
@@ -131,11 +136,11 @@ class LitModel(pl.LightningModule):
         if self.flow_from_end == 0: return
         self.flow_epoch = self.nepochs - self.flow_from_end
 
-    def update_flow(self):
-        if self.flow_epoch is None: return
-        if self.flow_epoch <= 0: return
-        if self.current_epoch >= self.flow_epoch:
-            self.flow = True
+    # def update_flow(self):
+    #     if self.flow_epoch is None: return
+    #     if self.flow_epoch <= 0: return
+    #     if self.current_epoch >= self.flow_epoch:
+    #         self.flow = True
 
     def configure_optimizers(self):
         optim = th.optim.Adam(self.parameters(),lr=self.lr_init,
@@ -170,8 +175,6 @@ class LitModel(pl.LightningModule):
         # -- sample noise from simulator --
         self.sample_noisy(batch)
 
-        # -- update flow --
-        self.update_flow()
 
         # -- each sample in batch --
         loss = 0 # init @ zero
@@ -194,8 +197,9 @@ class LitModel(pl.LightningModule):
         #         print(name)
 
         # -- append --
-        denos = th.stack(denos)
-        cleans = th.stack(cleans)
+        denos = th.cat(denos,0)
+        cleans = th.cat(cleans,0)
+        # print(denos.shape,cleans.shape)
 
         # -- log --
         self.log("train_loss", loss.item(), on_step=True,
@@ -216,7 +220,6 @@ class LitModel(pl.LightningModule):
         clean = batch['clean'][start:stop]/255.
 
         # -- if read flow --
-        # print(noisy.shape,batch['fflow'].shape,self.read_flows)
         if self.read_flows:
             flows = edict({"fflow":batch['fflow'],"bflow":batch["bflow"]})
         elif self.flow:
@@ -224,30 +227,43 @@ class LitModel(pl.LightningModule):
         else:
             raise ValueError("Must get flow. Either flow or read_flows must be true.")
 
-        # -- foward --
-        deno = self.forward(noisy)
+        # # -- foward --
+        # deno = self.forward(noisy)
 
-        # -- report loss --
-        loss = self.compute_loss(clean,noisy,deno,flows)
+        # -- compute fwd/loss --
+        deno,loss = self.compute_loss(self.net,clean,noisy,flows)
         return deno.detach(),clean,loss
 
-    def compute_loss(self,clean,noisy,deno,flows):
+    def compute_loss(self,model,clean,noisy,flows):
         if self.crit_name == "warped":
+            deno = self.forward(noisy)
             loss = self.crit.run_pairs(deno,noisy,flows)
         elif self.crit_name == "stnls":
-            loss = self.crit(deno,noisy,flows)
+            deno = self.forward(noisy)
+            loss = self.crit(deno,noisy,flows,self.current_epoch)
+        elif self.crit_name == "nb2nb":
+            deno,loss = self.crit.compute(self.net,noisy,self.current_epoch)
         elif self.crit_name == "sup":
+            deno = self.forward(noisy)
             loss = self.crit(clean,deno)
+        elif self.crit_name == "n2n":
+            deno = self.forward(noisy)
+            noisy2 = self.noise_sim(clean)
+            loss = self.crit(noisy2,deno)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
-        return loss
+        return deno,loss
 
     def init_crit(self):
         if self.crit_name == "warped":
             return WarpedLoss(self.dist_crit)
         elif self.crit_name == "stnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
-                            self.dist_crit,self.search_input,self.alpha)
+                            self.dist_crit,self.search_input,self.alpha,
+                            self.nepochs,self.stnls_k_decay)
+        elif self.crit_name == "nb2nb":
+            return Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
+                             self.nepochs,self.nb2nb_epoch_ratio)
         elif self.crit_name == "sup":
             def sup(clean,noisy):
                 if self.dist_crit == "l1":

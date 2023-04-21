@@ -62,18 +62,34 @@ import stnls
 class DnlsLoss(nn.Module):
 
     def __init__(self,ws, wt, ps, k, stride0, dist_crit="l1",
-                 search_input="noisy", alpha = 0.5):
+                 search_input="noisy", alpha = 0.5, nepochs=-1, k_decay=1.):
         super().__init__()
-        self.search = stnls.search.NonLocalSearch(ws,wt,ps,k,nheads=1,
-                                                  dist_type="l2",stride0=stride0,
-                                                  anchor_self=True)
-        wr,kr = 1,1.
-        self.refine = stnls.search.RefineSearch(ws,ps,k,wr,kr,nheads=1,
-                                                dist_type="l2",stride0=stride0,
-                                                anchor_self=True)
+
+        # -- search info --
+        self.ws = ws
+        self.wt = wt
+        self.ps = ps
+        self.k = k
+        self.stride0 = stride0
+        self.nepochs = nepochs
+        self.k_decay = k_decay
         self.search_input = search_input
         self.alpha = alpha
         self.dist_crit = dist_crit
+
+    def get_search_fxns(self,curr_epoch):
+        k = self.k
+        if self.k_decay > 0:
+            k = int(k * (curr_epoch / self.nepochs)*self.k_decay)
+            k = max(k,2)
+        search = stnls.search.NonLocalSearch(self.ws,self.wt,self.ps,self.k,nheads=1,
+                                             dist_type="l2",stride0=self.stride0,
+                                             anchor_self=True)
+        wr,kr = 1,1.
+        refine = stnls.search.RefineSearch(self.ws,self.ps,self.k,wr,kr,nheads=1,
+                                           dist_type="l2",stride0=self.stride0,
+                                           anchor_self=True)
+        return search
 
     def get_search_video(self,noisy,deno):
         srch = None
@@ -98,13 +114,14 @@ class DnlsLoss(nn.Module):
         else:
             raise ValueError(f"Uknown criterion [{self.crit}]")
 
-    def forward(self, noisy, deno, flows):
+    def forward(self, noisy, deno, flows, curr_epoch):
+        search,refine = get_search_fxns(curr_epoch)
         srch = self.get_search_video(noisy,deno)
         # print(srch.shape)
-        _,inds = self.search(srch,srch,flows.fflow,flows.bflow)
+        _,inds = search(srch,srch,flows.fflow,flows.bflow)
         # print("deno [max,min]: ",th.max(deno).item(),th.min(deno).item())
         # print("deno [max,min]: ",th.max(noisy).item(),th.min(noisy).item())
-        dists,_ = self.refine(deno,noisy,inds)
+        dists,_ = refine(deno,noisy,inds)
         loss = self.compute_loss(dists[...,1:])
         return loss
 
