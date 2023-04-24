@@ -78,11 +78,11 @@ def lit_pairs():
              "nepochs":0,"task":"denoising","uuid":"",
              "scheduler":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
-             "ws":9,"wt":3,"ps":7,"k":5,"stride0":4,"dist_crit":"l2",
+             "ws":9,"wt":3,"ps":7,"ps_dists":7,"k":5,"stride0":4,"dist_crit":"l2",
              "search_input":"interp","alpha":0.5,"crit_name":"warped",
              "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
-             "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.
-             "stnls_k_decay":1.}
+             "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.,
+             "stnls_k_decay":-1}
     return pairs
 
 def sim_pairs():
@@ -258,7 +258,7 @@ class LitModel(pl.LightningModule):
         if self.crit_name == "warped":
             return WarpedLoss(self.dist_crit)
         elif self.crit_name == "stnls":
-            return DnlsLoss(self.ws,self.wt,self.ps,self.k,self.stride0,
+            return DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha,
                             self.nepochs,self.stnls_k_decay)
         elif self.crit_name == "nb2nb":
