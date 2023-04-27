@@ -82,7 +82,7 @@ def lit_pairs():
              "search_input":"interp","alpha":0.5,"crit_name":"warped",
              "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
              "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.,
-             "stnls_k_decay":-1}
+             "stnls_k_decay":-1,"stnls_ps_dist_sched":"None","stnls_ws_sched":"None"}
     return pairs
 
 def sim_pairs():
@@ -260,7 +260,8 @@ class LitModel(pl.LightningModule):
         elif self.crit_name == "stnls":
             return DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha,
-                            self.nepochs,self.stnls_k_decay)
+                            self.nepochs,self.stnls_k_decay,self.stnls_ps_dist_sched,
+                            self.stnls_ws_sched)
         elif self.crit_name == "nb2nb":
             return Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
                              self.nepochs,self.nb2nb_epoch_ratio)
