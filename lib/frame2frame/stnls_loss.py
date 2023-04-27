@@ -81,10 +81,10 @@ class DnlsLoss(nn.Module):
 
     def get_search_fxns(self,curr_epoch):
         k = self.k
-        self.curr_k = k
         if self.k_decay > 0:# and self.search_input in ["l2","l2_v5","l2]:
             k = int(k * ((self.nepochs - curr_epoch) / self.nepochs)*self.k_decay)
             k = max(k,2)
+        self.curr_k = k
         # nsearch = 10
         # nsearch = self.ws*self.ws* (2*self.wt + 1)
         nsearch = k
