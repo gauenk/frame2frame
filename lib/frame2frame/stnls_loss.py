@@ -62,7 +62,8 @@ import stnls
 class DnlsLoss(nn.Module):
 
     def __init__(self,ws, wt, ps, ps_dists, k, stride0, dist_crit="l1",
-                 search_input="noisy", alpha = 0.5, nepochs=-1, k_decay=1.):
+                 search_input="noisy", alpha = 0.5, nepochs=-1, k_decay=1.,
+                 ps_dist_sched="None",ws_sched="None"):
         super().__init__()
 
         # -- search info --
@@ -77,22 +78,59 @@ class DnlsLoss(nn.Module):
         self.search_input = search_input
         self.alpha = alpha
         self.dist_crit = dist_crit
+        self.ps_dists_sched = ps_dist_sched
+        self.ws_sched = ws_sched
+        print(self.ps_dists_sched,self.ws_sched)
         self.curr_k = k
+        self.setup_ws_sched()
 
-    def get_search_fxns(self,curr_epoch):
+    def setup_ws_sched(self):
+        ws = self.ws
+        self.ws_grid = []
+        if self.ws_sched != "None":
+            if self.ws_sched.split("_")[0] == "lin":
+                ws_tgt = int(self.ws_sched.split("_")[1])
+                assert ws_tgt > ws
+                m = (ws_tgt-ws+1)/self.nepochs
+                self.ws_grid = [ws + x*m for x in np.arange(self.nepochs)]
+                self.ws_grid = [int(x) for x in self.ws_grid]
+                # print(self.ws_grid)
+
+    def get_k(self,curr_epoch):
         k = self.k
         if self.k_decay > 0:# and self.search_input in ["l2","l2_v5","l2]:
             k = int(k * ((self.nepochs - curr_epoch) / self.nepochs)*self.k_decay)
             k = max(k,2)
         self.curr_k = k
+        return k
+
+    def get_ws(self,curr_epoch):
+        ws = self.ws
+        if len(self.ws_grid) > 0:
+            ws = self.ws_grid[curr_epoch]
+        self.curr_ws = ws
+        return ws
+
+    def get_ps_dists(self,curr_epoch):
+        ps_dists = self.ps_dists
+        if self.ps_dists_sched != "None":
+            switch_epoch = int(self.ps_dists_sched.split("_")[0])
+            if curr_epoch >= switch_epoch:
+               ps_dists = int(self.ps_dists_sched.split("_")[1])
+        self.curr_ps_dists = ps_dists
+        return ps_dists
+
+    def get_search_fxns(self,curr_epoch):
         # nsearch = 10
         # nsearch = self.ws*self.ws* (2*self.wt + 1)
-        nsearch = k
-        search = stnls.search.NonLocalSearch(self.ws,self.wt,self.ps,nsearch,
+        k = self.get_k(curr_epoch)
+        ws = self.get_ws(curr_epoch)
+        search = stnls.search.NonLocalSearch(ws,self.wt,self.ps,k,
                                              nheads=1,dist_type="l2",
                                              stride0=self.stride0,
                                              anchor_self=True)
         wr,kr = 1,1.
+        # todo: try not sorting; e.g. k == -1
         refine = stnls.search.RefineSearch(self.ws,self.ps,k,wr,kr,nheads=1,
                                            dist_type="l2",stride0=self.stride0,
                                            anchor_self=True)
@@ -119,7 +157,7 @@ class DnlsLoss(nn.Module):
             raise ValueError(f"Uknown search video [{self.search_input}]")
         return srch
 
-    def compute_loss(self,deno,noisy,dists,inds,refine):
+    def compute_loss(self,deno,noisy,dists,inds,refine,curr_epoch):
         if self.dist_crit == "l1":
             dists,_ = refine(deno,noisy,inds)
             eps = 1.*1e-6
@@ -180,7 +218,12 @@ class DnlsLoss(nn.Module):
         elif self.dist_crit == "l2_v8":
             loss = mse_with_biases(noisy,deno,inds,self.ps)
         elif self.dist_crit == "l2_v9":
-            loss = mse_with_biases(noisy,deno,inds,self.ps_dists)
+            ps_dists = self.get_ps_dists(curr_epoch)
+            loss = mse_with_biases(noisy,deno,inds,ps_dists)
+            return loss
+        elif self.dist_crit == "l2_v10":
+            ps_dists = self.get_ps_dists(curr_epoch)
+            loss = mse_without_biases(noisy,deno,inds,ps_dists)
             return loss
         else:
             raise ValueError(f"Uknown criterion [{self.crit}]")
@@ -204,7 +247,7 @@ class DnlsLoss(nn.Module):
         # print("deno [max,min]: ",th.max(deno).item(),th.min(deno).item())
         # print("deno [max,min]: ",th.max(noisy).item(),th.min(noisy).item())
         # deno_d = deno.detach()
-        loss = self.compute_loss(deno,noisy,dists,inds,refine)
+        loss = self.compute_loss(deno,noisy,dists,inds,refine,curr_epoch)
         # loss = self.compute_loss(dists[...,1:])
         return loss
 
@@ -281,4 +324,30 @@ def mse_with_biases(noisy,deno,inds,ps):
     loss = th.mean(delta**2)
 
     return loss
+
+def mse_without_biases(noisy,deno,inds,ps):
+
+    # -- unpack patches --
+    # dists =th.zeros_like(inds[...,0])*1.
+    # _,inds = stnls.nn.remove_same_frame(dists,inds)
+    # print("inds.shape: ",inds.shape)
+    inds = inds[:,0]
+
+    unfold = stnls.UnfoldK(ps)
+
+    patches0 = unfold(deno,inds)
+    patches1 = unfold(noisy,inds)
+
+    shape_str = 'B Q K 1 (HD C) ph pw -> K (B HD) Q (C ph pw)'
+    patches0 = rearrange(patches0,shape_str,HD=1)
+    patches1 = rearrange(patches1,shape_str,HD=1)
+
+    # -- compute loss --
+    delta0 = patches0[:1] - patches1[1:]
+    # delta1 = patches0[:1].detach() - patches0[:1].detach()
+    delta = delta0# + delta1
+    loss = th.mean(delta**2)
+
+    return loss
+
 
