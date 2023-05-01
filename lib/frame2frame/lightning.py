@@ -41,6 +41,7 @@ import dev_basics.utils.gpu_mem as gpu_mem
 from .warped_loss import WarpedLoss
 from .stnls_loss import DnlsLoss
 from .nb2nb_loss import Nb2NbLoss
+from .b2u_loss import B2ULoss
 
 # -- noise sims --
 import importlib
@@ -82,7 +83,8 @@ def lit_pairs():
              "search_input":"interp","alpha":0.5,"crit_name":"warped",
              "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
              "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.,
-             "stnls_k_decay":-1,"stnls_ps_dist_sched":"None","stnls_ws_sched":"None"}
+             "stnls_k_decay":-1,"stnls_ps_dist_sched":"None",
+             "stnls_ws_sched":"None","stnls_center_crop":0.}
     return pairs
 
 def sim_pairs():
@@ -200,6 +202,7 @@ class LitModel(pl.LightningModule):
         denos = th.cat(denos,0)
         cleans = th.cat(cleans,0)
         # print(denos.shape,cleans.shape)
+        # mse = th.mean((cleans-denos)**2).item()
 
         # -- log --
         self.log("train_loss", loss.item(), on_step=True,
@@ -207,9 +210,21 @@ class LitModel(pl.LightningModule):
 
         # -- terminal log --
         val_psnr = np.mean(compute_psnrs(denos,cleans,div=1.)).item()
-        self.gen_loger.info("train_psnr: %2.2f" % val_psnr)
+        # val_ssim = np.mean(compute_ssims(denos,cleans,div=1.)).item() # too slow.
+
+        # self.gen_loger.info("train_psnr: %2.2f" % val_psnr)
         self.log("train_loss", loss.item(), on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
+        self.log("train_psnr", val_psnr, on_step=True,
+                 on_epoch=False, batch_size=self.batch_size)
+        # self.log("train_ssim", val_ssim, on_step=True,
+        #          on_epoch=False, batch_size=self.batch_size)
+
+        # # -- terminal log --
+        # val_psnr = np.mean(compute_psnrs(denos,cleans,div=1.)).item()
+        self.gen_loger.info("train_psnr: %2.2f" % val_psnr)
+        # # self.log("train_loss", loss.item(), on_step=True,
+        # #          on_epoch=False, batch_size=self.batch_size)
 
         return loss
 
@@ -240,9 +255,17 @@ class LitModel(pl.LightningModule):
             loss = self.crit.run_pairs(deno,noisy,flows)
         elif self.crit_name == "stnls":
             deno = self.forward(noisy)
-            loss = self.crit(deno,noisy,flows,self.current_epoch)
+            loss = self.crit(noisy,deno,flows,self.current_epoch)
         elif self.crit_name == "nb2nb":
             deno,loss = self.crit.compute(self.net,noisy,self.current_epoch)
+        elif self.crit_name == "b2u":
+            deno,loss = self.crit.compute(self.net,noisy,self.current_epoch)
+        elif self.crit_name == "nb2nb_stnls":
+            deno0 = self.forward(noisy)
+            loss0 = self.stnls_f2f(deno0,noisy,flows,self.current_epoch)
+            deno1,loss1 = self.nb2nb.compute(self.net,noisy,self.current_epoch)
+            deno = 0.5*(deno0 + deno1)
+            loss = 0.5*(loss0 + loss1)
         elif self.crit_name == "sup":
             deno = self.forward(noisy)
             loss = self.crit(clean,deno)
@@ -261,10 +284,25 @@ class LitModel(pl.LightningModule):
             return DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha,
                             self.nepochs,self.stnls_k_decay,self.stnls_ps_dist_sched,
-                            self.stnls_ws_sched)
+                            self.stnls_ws_sched,1.,self.stnls_center_crop)
         elif self.crit_name == "nb2nb":
             return Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
                              self.nepochs,self.nb2nb_epoch_ratio)
+        elif self.crit_name == "b2u":
+            ninfo = "%s_%d_%d" % (self.ntype,self.sigma,self.rate)
+            return B2ULoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
+                           self.nepochs,self.nb2nb_epoch_ratio,ninfo)
+        elif self.crit_name == "nb2nb_stnls":
+            nb2nb = Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
+                              self.nepochs,self.nb2nb_epoch_ratio)
+            stnls_f2f = DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,
+                                 self.k,self.stride0,self.dist_crit,
+                                 self.search_input,self.alpha,self.nepochs,
+                                 self.stnls_k_decay,self.stnls_ps_dist_sched,
+                                 self.stnls_ws_sched,1.,self.stnls_center_crop)
+            self.nb2nb = nb2nb
+            self.stnls_f2f = stnls_f2f
+            return None
         elif self.crit_name == "sup":
             def sup(clean,noisy):
                 if self.dist_crit == "l1":
@@ -293,6 +331,8 @@ class LitModel(pl.LightningModule):
 
         # -- loss --
         loss = th.mean((clean - deno)**2)
+        val_psnr = np.mean(compute_psnrs(deno,clean,div=1.)).item()
+        val_ssim = np.mean(compute_ssims(deno,clean,div=1.)).item()
 
         # -- report --
         self.log("val_loss", loss.item(), on_step=False,
@@ -301,10 +341,12 @@ class LitModel(pl.LightningModule):
                  on_epoch=True,batch_size=1,sync_dist=True)
         self.log("val_mem_alloc", mem_alloc, on_step=False,
                  on_epoch=True,batch_size=1,sync_dist=True)
-
-        # -- terminal log --
-        val_psnr = np.mean(compute_psnrs(deno,clean,div=1.)).item()
+        self.log("val_psnr", val_psnr, on_step=False,
+                 on_epoch=True,batch_size=1,sync_dist=True)
+        self.log("val_ssim", val_ssim, on_step=False,
+                 on_epoch=True,batch_size=1,sync_dist=True)
         self.gen_loger.info("val_psnr: %2.2f" % val_psnr)
+        self.gen_loger.info("val_ssim: %.3f" % val_ssim)
 
     def test_step(self, batch, batch_nb):
 
@@ -327,12 +369,13 @@ class LitModel(pl.LightningModule):
         ssim = np.mean(compute_ssims(deno,clean,div=1.)).item()
 
         # -- terminal log --
-        self.log("psnr", psnr, on_step=True, on_epoch=False, batch_size=1)
-        self.log("ssim", ssim, on_step=True, on_epoch=False, batch_size=1)
-        self.log("index", index,on_step=True,on_epoch=False,batch_size=1)
-        self.log("mem_res",  mem_res, on_step=True, on_epoch=False, batch_size=1)
-        self.log("mem_alloc",  mem_alloc, on_step=True, on_epoch=False, batch_size=1)
+        self.log("test_psnr", psnr, on_step=True, on_epoch=False, batch_size=1)
+        self.log("test_ssim", ssim, on_step=True, on_epoch=False, batch_size=1)
+        self.log("test_index", index,on_step=True,on_epoch=False,batch_size=1)
+        self.log("test_mem_res", mem_res, on_step=True, on_epoch=False, batch_size=1)
+        self.log("test_mem_alloc", mem_alloc,on_step=True,on_epoch=False,batch_size=1)
         self.gen_loger.info("te_psnr: %2.2f" % psnr)
+        self.gen_loger.info("te_ssim: %.3f" % ssim)
 
         # -- log --
         results = edict()

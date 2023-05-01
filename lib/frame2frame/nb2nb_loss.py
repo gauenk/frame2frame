@@ -77,8 +77,8 @@ def generate_mask_pair(img):
         dtype=th.int64,
         device=img.device)
     rd_idx = th.zeros(size=(n * h // 2 * w // 2, ),
-                         dtype=th.int64,
-                         device=img.device)
+                      dtype=th.int64,
+                      device=img.device)
     th.randint(low=0,
                high=8,
                size=(n * h // 2 * w // 2, ),
@@ -86,10 +86,10 @@ def generate_mask_pair(img):
                out=rd_idx)
     rd_pair_idx = idx_pair[rd_idx]
     rd_pair_idx += th.arange(start=0,
-                                end=n * h // 2 * w // 2 * 4,
-                                step=4,
-                                dtype=th.int64,
-                                device=img.device).reshape(-1, 1)
+                             end=n * h // 2 * w // 2 * 4,
+                             step=4,
+                             dtype=th.int64,
+                             device=img.device).reshape(-1, 1)
     # get masks
     mask1[rd_pair_idx[:, 0]] = 1
     mask2[rd_pair_idx[:, 1]] = 1
@@ -106,6 +106,7 @@ def generate_subimages(img, mask):
     for i in range(c):
         img_per_channel = space_to_depth(img[:, i:i + 1, :, :], block_size=2)
         img_per_channel = img_per_channel.permute(0, 2, 3, 1).reshape(-1)
+        # print(mask.shape,img_per_channel.shape)
         subimage[:, i:i + 1, :, :] = img_per_channel[mask].reshape(
             n, h // 2, w // 2, 1).permute(0, 3, 1, 2)
     return subimage
@@ -113,6 +114,7 @@ def generate_subimages(img, mask):
 def space_to_depth(x, block_size):
     n, c, h, w = x.size()
     unfolded_x = th.nn.functional.unfold(x, block_size, stride=block_size)
+    # print((n, c, h, w), unfolded_x.shape)
     return unfolded_x.view(n, c * block_size**2, h // block_size,
                            w // block_size)
 

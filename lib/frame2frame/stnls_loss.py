@@ -63,7 +63,8 @@ class DnlsLoss(nn.Module):
 
     def __init__(self,ws, wt, ps, ps_dists, k, stride0, dist_crit="l1",
                  search_input="noisy", alpha = 0.5, nepochs=-1, k_decay=1.,
-                 ps_dist_sched="None",ws_sched="None"):
+                 ps_dist_sched="None",ws_sched="None",epoch_ratio=1.,
+                 center_crop=0.):
         super().__init__()
 
         # -- search info --
@@ -72,6 +73,7 @@ class DnlsLoss(nn.Module):
         self.ps = ps
         self.ps_dists = ps_dists
         self.k = k
+        self.k0 = k
         self.stride0 = stride0
         self.nepochs = nepochs
         self.k_decay = k_decay
@@ -80,8 +82,10 @@ class DnlsLoss(nn.Module):
         self.dist_crit = dist_crit
         self.ps_dists_sched = ps_dist_sched
         self.ws_sched = ws_sched
-        print(self.ps_dists_sched,self.ws_sched)
+        # print(self.ps_dists_sched,self.ws_sched)
+        self.center_crop = center_crop
         self.curr_k = k
+        self.epoch_ratio = epoch_ratio
         self.setup_ws_sched()
 
     def setup_ws_sched(self):
@@ -131,7 +135,8 @@ class DnlsLoss(nn.Module):
                                              anchor_self=True)
         wr,kr = 1,1.
         # todo: try not sorting; e.g. k == -1
-        refine = stnls.search.RefineSearch(self.ws,self.ps,k,wr,kr,nheads=1,
+        ps = self.ps_dists if self.ps_dists >= 0 else self.ps
+        refine = stnls.search.RefineSearch(self.ws,ps,-1,wr,kr,nheads=1,
                                            dist_type="l2",stride0=self.stride0,
                                            anchor_self=True)
         # refine = stnls.search.QuadrefSearch(self.ws,self.ps,self.k,wr,kr,nheads=1,
@@ -165,6 +170,9 @@ class DnlsLoss(nn.Module):
             return loss
         elif self.dist_crit == "l2":
             dists,_ = refine(deno,noisy,inds)
+            if self.center_crop > 0:
+                H,W = deno.shape[-2:]
+                dists,inds = self.run_center_crop(dists,inds,H,W)
             loss = th.mean(dists[...,1:])
             return loss
         elif self.dist_crit == "l2_v2":
@@ -217,6 +225,7 @@ class DnlsLoss(nn.Module):
             return loss
         elif self.dist_crit == "l2_v8":
             loss = mse_with_biases(noisy,deno,inds,self.ps)
+            return loss
         elif self.dist_crit == "l2_v9":
             ps_dists = self.get_ps_dists(curr_epoch)
             loss = mse_with_biases(noisy,deno,inds,ps_dists)
@@ -225,14 +234,63 @@ class DnlsLoss(nn.Module):
             ps_dists = self.get_ps_dists(curr_epoch)
             loss = mse_without_biases(noisy,deno,inds,ps_dists)
             return loss
+        elif self.dist_crit == "l2_v11":
+            ps_dists = self.get_ps_dists(curr_epoch)
+            Lambda = (curr_epoch / (1.*self.nepochs)) * self.epoch_ratio
+            loss0 = mse_without_biases(noisy,deno,inds,ps_dists)
+            loss1 = mse_with_biases(noisy,deno,inds,ps_dists)
+            loss = loss0 + Lambda * loss1
+            return loss
+        elif self.dist_crit == "l2_v12":
+            ps_dists = self.get_ps_dists(curr_epoch)
+            Lambda = (curr_epoch / (1.*self.nepochs)) * self.epoch_ratio
+            loss = mse_with_without_biases(noisy,deno,inds,ps_dists,Lambda)
+            return loss
+        elif self.dist_crit == "l2_v13":
+            ps_dists = self.get_ps_dists(curr_epoch)
+            loss = compute_sims_image(noisy,deno,inds,ps_dists)
+            return loss
+        elif self.dist_crit == "l2_v14":
+            dists,_ = refine(deno,noisy,inds)
+            if self.center_crop > 0:
+                H,W = deno.shape[-2:]
+                dists,inds = self.run_center_crop(dists,inds,H,W)
+            loss = th.mean(dists)
+            return loss
         else:
-            raise ValueError(f"Uknown criterion [{self.crit}]")
+            raise ValueError(f"Uknown criterion [{self.dist_crit}]")
+
+    def run_center_crop(self,dists,inds,H,W):
+
+        # -- get size --
+        nH = (H-1)//self.stride0+1
+        nW = (W-1)//self.stride0+1
+
+        # -- reshape --
+        dists = rearrange(dists,'b 1 (t nH nW) k -> b t nH nW k',nH=nH,nW=nW)
+        inds = rearrange(inds,'b 1 (t nH nW) k tr -> b t nH nW k tr',nH=nH,nW=nW)
+
+        # -- center crop --
+        cc = self.center_crop
+        sH,eH = cc,-cc
+        sW,eW = cc,-cc
+        mask = th.zeros_like(dists)
+        mask[:,:,sH:eH,sW:eW] = 1.
+        dists_cc = dists * mask
+        # inds_cc = inds[:,:,sH:eH,sW:eW]
+
+        # -- reshape --
+        dists_cc = rearrange(dists_cc,'b t nH nW k -> b 1 (t nH nW) k')
+        # inds_cc = rearrange(inds_cc,'b t nH nW tr k -> b 1 (t nH nW) k tr')
+
+        return dists_cc,inds#_cc
 
     def forward(self, noisy, deno, flows, curr_epoch):
         search,refine = self.get_search_fxns(curr_epoch)
         srch = self.get_search_video(noisy,deno)
         # print(srch.shape)
         dists,inds = search(srch,srch,flows.fflow,flows.bflow)
+
         # print(dists)
         # print("-"*50)
         # dists,_ = refine(deno,noisy,inds)
@@ -319,9 +377,17 @@ def mse_with_biases(noisy,deno,inds,ps):
 
     # -- compute loss --
     delta0 = patches0[:1] - patches1[1:]
-    delta1 = patches0[:1].detach() - patches0[:1].detach()
-    delta = delta0 + delta1
+    delta1 = patches0[:1].detach() - patches0[1:].detach()
+    delta = delta0 - delta1
     loss = th.mean(delta**2)
+    # loss = th.mean(delta0[0]**2) + th.mean(delta**2)
+
+    # delta = patches0[1:] - patches1[1:]
+    # delta0 = patches0[:1] - patches0[1:]
+    # # delta1 = patches0[:1].detach() - patches1[:1].detach()
+    # # # delta = patches0[1:] - patches1[1:]
+    # # delta = delta0 - delta1
+    # loss = th.mean(delta0**2)
 
     return loss
 
@@ -332,6 +398,7 @@ def mse_without_biases(noisy,deno,inds,ps):
     # _,inds = stnls.nn.remove_same_frame(dists,inds)
     # print("inds.shape: ",inds.shape)
     inds = inds[:,0]
+    inds = inds.contiguous()
 
     unfold = stnls.UnfoldK(ps)
 
@@ -350,4 +417,49 @@ def mse_without_biases(noisy,deno,inds,ps):
 
     return loss
 
+def mse_with_without_biases(noisy,deno,inds,ps,Lambda):
+    inds = inds[:,0]
+    inds = inds.contiguous()
 
+    unfold = stnls.UnfoldK(ps)
+
+    patches0 = unfold(deno,inds)
+    patches1 = unfold(noisy,inds)
+
+    shape_str = 'B Q K 1 (HD C) ph pw -> K (B HD) Q (C ph pw)'
+    patches0 = rearrange(patches0,shape_str,HD=1)
+    patches1 = rearrange(patches1,shape_str,HD=1)
+
+    # -- compute loss --
+    delta0 = patches0[:1] - patches1[1:]
+    delta1 = patches0[:1].detach() - patches0[:1].detach()
+    loss = th.mean(delta0**2) + Lambda * th.mean((delta0-delta1)**2)
+
+    return loss
+
+
+
+def compute_sims_image(noisy,deno,inds,ps):
+
+    # -- view --
+    # print("noisy.shape: ",noisy.shape)
+    # print("deno.shape: ",deno.shape)
+    # print("inds.shape: ",inds.shape)
+    # print("ps: ",ps)
+
+    # -- init --
+    inds = inds[:,0]
+    adj = 0
+    K = inds.shape[-2]
+    unfold = stnls.UnfoldK(ps,adj=adj,reflect_bounds=True)
+    fold = stnls.iFoldz(noisy.shape,adj=adj)
+
+    # -- get patches --
+    loss = 0
+    for k in range(K):
+        patches_k = unfold(noisy,inds[...,[k],:])
+        vid_k,wvid_k = fold(patches_k)
+        vid_k = vid_k / wvid_k
+        loss += th.mean((vid_k - deno)**2)/K
+
+    return loss
