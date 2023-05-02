@@ -81,7 +81,7 @@ class B2ULoss():
         if Lambda <= self.Thread1:
             beta = self.lambda2
         elif self.Thread1 <= Lambda <= self.Thread2:
-            beta = Lambda2 + (Lambda - self.Thread1) * \
+            beta = self.lambda2 + (Lambda - self.Thread1) * \
                 (self.epoch_ratio-self.lambda2) / (self.Thread2-self.Thread1)
         else:
             beta = self.epoch_ratio
