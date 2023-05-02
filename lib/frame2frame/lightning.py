@@ -80,7 +80,7 @@ def lit_pairs():
              "scheduler_name":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"ps_dists":7,"k":5,"stride0":4,"dist_crit":"l2",
-             "search_input":"interp","alpha":0.5,"crit_name":"warped",
+             "search_input":"deno","alpha":0.5,"crit_name":"warped",
              "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
              "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.,
              "stnls_k_decay":-1,"stnls_ps_dist_sched":"None",
