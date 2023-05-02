@@ -77,14 +77,16 @@ def lit_pairs():
              "isize":None,"bw":False,"lr_init":1e-3,
              "lr_final":1e-8,"weight_decay":0.,
              "nepochs":0,"task":"denoising","uuid":"",
-             "scheduler":"default","step_lr_size":5,
+             "scheduler_name":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"ps_dists":7,"k":5,"stride0":4,"dist_crit":"l2",
              "search_input":"interp","alpha":0.5,"crit_name":"warped",
              "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
              "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.,
              "stnls_k_decay":-1,"stnls_ps_dist_sched":"None",
-             "stnls_ws_sched":"None","stnls_center_crop":0.}
+             "stnls_ws_sched":"None","stnls_center_crop":0.,
+             "optim_name":"adam","sgd_momentum":0.1,"sgd_dampening":0.1,
+             "coswr_T0":-1,"coswr_Tmult":1,"coswr_eta_min":1e-9}
     return pairs
 
 def sim_pairs():
@@ -117,6 +119,7 @@ class LitModel(pl.LightningModule):
         self.automatic_optimization=True
         choose_noise = data_hub.transforms.noise.choose_noise_transform
         self.noise_sim = choose_noise(lit_cfg)
+        self.dset_length = 0
 
     def forward(self,vid):
         # flows = flow.orun(vid,self.flow,ftype=self.flow_method)
@@ -145,31 +148,50 @@ class LitModel(pl.LightningModule):
     #         self.flow = True
 
     def configure_optimizers(self):
-        optim = th.optim.Adam(self.parameters(),lr=self.lr_init,
-                              weight_decay=self.weight_decay)
+        if self.optim_name == "adam":
+            optim = th.optim.Adam(self.parameters(),lr=self.lr_init,
+                                  weight_decay=self.weight_decay)
+        elif self.optim_name == "sgd":
+            optim = th.optim.SGD(self.parameters(),lr=self.lr_init,
+                                 weight_decay=self.weight_decay,
+                                 momentum=self.sgd_momentum,
+                                 dampening=self.sgd_dampening)
+        else:
+            raise ValueError(f"Unknown optim [{self.optim_name}]")
         sched = self.configure_scheduler(optim)
         return [optim], [sched]
 
+    def lr_scheduler_step(self, scheduler, metric, idk):
+        scheduler.step()
+
     def configure_scheduler(self,optim):
-        if self.scheduler in ["default","exp_decay"]:
+        if self.scheduler_name in ["default","exp_decay"]:
             gamma = 1-math.exp(math.log(self.lr_final/self.lr_init)/self.nepochs)
             ExponentialLR = th.optim.lr_scheduler.ExponentialLR
             scheduler = ExponentialLR(optim,gamma=gamma) # (.995)^50 ~= .78
-        elif self.scheduler in ["step","steplr"]:
+        elif self.scheduler_name in ["step","steplr"]:
             args = (self.step_lr_size,self.step_lr_gamma)
             print("[Scheduler]: StepLR(%d,%2.2f)" % args)
             StepLR = th.optim.lr_scheduler.StepLR
             scheduler = StepLR(optim,step_size=self.step_lr_size,
                                gamma=self.step_lr_gamma)
-        elif self.scheduler in ["cos"]:
+        elif self.scheduler_name in ["cos"]:
             CosAnnLR = th.optim.lr_scheduler.CosineAnnealingLR
             T0,Tmult = 1,1
             scheduler = CosAnnLR(optim,T0,Tmult)
-        elif self.scheduler in ["none"]:
+        elif self.scheduler_name in ["coswr"]:
+            lr_sched =th.optim.lr_scheduler
+            CosineAnnealingWarmRestarts = lr_sched.CosineAnnealingWarmRestarts
+            # print(self.coswr_T0,self.coswr_Tmult,self.coswr_eta_min)
+            scheduler = CosineAnnealingWarmRestarts(optim,self.coswr_T0,
+                                                    T_mult=self.coswr_Tmult,
+                                                    eta_min=self.coswr_eta_min)
+            scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
+        elif self.scheduler_name in ["none"]:
             StepLR = th.optim.lr_scheduler.StepLR
-            scheduler = StepLR(optim,step_size=10**3,gamma=1.)
+            scheduler = StepLR(optim,step_size=10**5,gamma=1.)
         else:
-            raise ValueError(f"Uknown scheduler [{self.scheduler}]")
+            raise ValueError(f"Uknown scheduler [{self.scheduler_name}]")
         return scheduler
 
     def training_step(self, batch, batch_idx):
@@ -216,6 +238,9 @@ class LitModel(pl.LightningModule):
         self.log("train_loss", loss.item(), on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
         self.log("train_psnr", val_psnr, on_step=True,
+                 on_epoch=False, batch_size=self.batch_size)
+        lr = self.optimizers().param_groups[-1]['lr']
+        self.log("lr", lr, on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
         # self.log("train_ssim", val_ssim, on_step=True,
         #          on_epoch=False, batch_size=self.batch_size)

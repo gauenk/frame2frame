@@ -237,7 +237,9 @@ class DnlsLoss(nn.Module):
         elif self.dist_crit == "l2_v11":
             ps_dists = self.get_ps_dists(curr_epoch)
             Lambda = (curr_epoch / (1.*self.nepochs)) * self.epoch_ratio
-            loss0 = mse_without_biases(noisy,deno,inds,ps_dists)
+            loss0 = mse_without_biases(noisy,deno,inds,ps_dists) # splendid-water
+            # dists,_ = refine(deno,noisy,inds) # add me next.
+            # loss0 = th.mean(dists[...,1:])
             loss1 = mse_with_biases(noisy,deno,inds,ps_dists)
             loss = loss0 + Lambda * loss1
             return loss
@@ -256,6 +258,15 @@ class DnlsLoss(nn.Module):
                 H,W = deno.shape[-2:]
                 dists,inds = self.run_center_crop(dists,inds,H,W)
             loss = th.mean(dists)
+            return loss
+        elif self.dist_crit == "l2_v15":
+            ps_dists = self.get_ps_dists(curr_epoch)
+            Lambda = 2
+            loss0 = mse_without_biases(noisy,deno,inds,ps_dists) # splendid-water
+            # dists,_ = refine(deno,noisy,inds) # add me next.
+            # loss0 = th.mean(dists[...,1:])
+            loss1 = mse_with_biases(noisy,deno,inds,ps_dists)
+            loss = loss0 + Lambda * loss1
             return loss
         else:
             raise ValueError(f"Uknown criterion [{self.dist_crit}]")
