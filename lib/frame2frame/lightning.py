@@ -86,7 +86,8 @@ def lit_pairs():
              "stnls_k_decay":-1,"stnls_ps_dist_sched":"None",
              "stnls_ws_sched":"None","stnls_center_crop":0.,
              "optim_name":"adam","sgd_momentum":0.1,"sgd_dampening":0.1,
-             "coswr_T0":-1,"coswr_Tmult":1,"coswr_eta_min":1e-9}
+             "coswr_T0":-1,"coswr_Tmult":1,"coswr_eta_min":1e-9,
+             "step_lr_multisteps":"30-50"}
     return pairs
 
 def sim_pairs():
@@ -180,6 +181,12 @@ class LitModel(pl.LightningModule):
         elif self.scheduler_name in ["cosa"]:
             CosAnnLR = th.optim.lr_scheduler.CosineAnnealingLR
             scheduler = CosAnnLR(optim,self.nepochs)
+            scheduler = {"scheduler": scheduler, "interval": "epoch", "frequency": 1}
+        elif self.scheduler_name in ["multi_step"]:
+            milestones = [int(x) for x in self.step_lr_multisteps.split("-")]
+            MultiStepLR = th.optim.lr_scheduler.MultiStepLR
+            scheduler = MultiStepLR(optim,milestones=milestones,
+                                    gamma=self.step_lr_gamma)
             scheduler = {"scheduler": scheduler, "interval": "epoch", "frequency": 1}
         elif self.scheduler_name in ["coswr"]:
             lr_sched =th.optim.lr_scheduler
