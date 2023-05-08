@@ -91,14 +91,13 @@ class DnlsLoss(nn.Module):
     def setup_ws_sched(self):
         ws = self.ws
         self.ws_grid = []
-        if self.ws_sched != "None":
+        if self.ws_sched != "None": # lin_21
             if self.ws_sched.split("_")[0] == "lin":
                 ws_tgt = int(self.ws_sched.split("_")[1])
                 assert ws_tgt > ws
                 m = (ws_tgt-ws+1)/self.nepochs
                 self.ws_grid = [ws + x*m for x in np.arange(self.nepochs)]
                 self.ws_grid = [int(x) for x in self.ws_grid]
-                # print(self.ws_grid)
 
     def get_k(self,curr_epoch):
         k = self.k

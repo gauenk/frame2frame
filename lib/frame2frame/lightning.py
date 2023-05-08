@@ -159,26 +159,28 @@ class LitModel(pl.LightningModule):
         else:
             raise ValueError(f"Unknown optim [{self.optim_name}]")
         sched = self.configure_scheduler(optim)
+        print(sched)
         return [optim], [sched]
 
-    def lr_scheduler_step(self, scheduler, metric, idk):
-        scheduler.step()
+    # def lr_scheduler_step(self, scheduler, metric, idk):
+    #     scheduler.step()
 
     def configure_scheduler(self,optim):
         if self.scheduler_name in ["default","exp_decay"]:
-            gamma = 1-math.exp(math.log(self.lr_final/self.lr_init)/self.nepochs)
+            gamma = math.exp(math.log(self.lr_final/self.lr_init)/self.nepochs)
             ExponentialLR = th.optim.lr_scheduler.ExponentialLR
             scheduler = ExponentialLR(optim,gamma=gamma) # (.995)^50 ~= .78
+            scheduler = {"scheduler": scheduler, "interval": "epoch", "frequency": 1}
         elif self.scheduler_name in ["step","steplr"]:
             args = (self.step_lr_size,self.step_lr_gamma)
             print("[Scheduler]: StepLR(%d,%2.2f)" % args)
             StepLR = th.optim.lr_scheduler.StepLR
             scheduler = StepLR(optim,step_size=self.step_lr_size,
                                gamma=self.step_lr_gamma)
-        elif self.scheduler_name in ["cos"]:
+        elif self.scheduler_name in ["cosa"]:
             CosAnnLR = th.optim.lr_scheduler.CosineAnnealingLR
-            T0,Tmult = 1,1
-            scheduler = CosAnnLR(optim,T0,Tmult)
+            scheduler = CosAnnLR(optim,self.nepochs)
+            scheduler = {"scheduler": scheduler, "interval": "epoch", "frequency": 1}
         elif self.scheduler_name in ["coswr"]:
             lr_sched =th.optim.lr_scheduler
             CosineAnnealingWarmRestarts = lr_sched.CosineAnnealingWarmRestarts
@@ -349,6 +351,7 @@ class LitModel(pl.LightningModule):
 
         # -- denoise --
         noisy,clean = batch['noisy']/255.,batch['clean']/255.
+        val_index = batch['index'].cpu().item()
 
         # -- forward --
         gpu_mem.print_peak_gpu_stats(False,"val",reset=True)
@@ -371,6 +374,8 @@ class LitModel(pl.LightningModule):
         self.log("val_psnr", val_psnr, on_step=False,
                  on_epoch=True,batch_size=1,sync_dist=True)
         self.log("val_ssim", val_ssim, on_step=False,
+                 on_epoch=True,batch_size=1,sync_dist=True)
+        self.log("val_index", val_index, on_step=False,
                  on_epoch=True,batch_size=1,sync_dist=True)
         self.log("global_step",self.global_step,on_step=False,
                  on_epoch=True,batch_size=1)
