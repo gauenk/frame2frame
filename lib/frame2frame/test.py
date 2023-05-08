@@ -78,6 +78,9 @@ def run(cfg):
     results.psnrs = []
     results.ssims = []
     results.strred = []
+    results.psnrs_pp = []
+    results.ssims_pp = []
+    results.strred_pp = []
     results.noisy_psnrs = []
     results.deno_fns = []
     results.vid_frames = []
@@ -88,7 +91,7 @@ def run(cfg):
                    "agg","fold","fwd_grad","bwd"]
     for field in time_fields:
         results["timer_%s"%field] = []
-    mem_fields = ["deno","adapt","fwd_grad","bwd"]
+    mem_fields = ["deno","deno_pp","adapt","fwd_grad","bwd"]
     for field in mem_fields:
         results["%s_mem_res"%field] = []
         results["%s_mem_alloc"%field] = []
@@ -192,12 +195,19 @@ def run(cfg):
         with MemIt(memer,"deno"):
             with TimeIt(timer,"deno"):
                 with th.no_grad():
-                    if tcfg.crit_name == "b2u":
-                        deno = run_ub2_test(fwd_fxn,noisy_input/imax,flows)
-                    else:
-                        deno = fwd_fxn(noisy_input/imax,flows)
+                    deno = fwd_fxn(noisy_input/imax,flows)
                 deno = deno.clamp(0.,1.)*imax
         mtimes = model.times
+
+        # -- direct denoise --
+        with MemIt(memer,"deno_pp"):
+            with TimeIt(timer,"deno_pp"):
+                with th.no_grad():
+                    if tcfg.crit_name == "b2u":
+                        deno_pp = run_ub2_test(fwd_fxn,noisy_input/imax,flows)
+                    else:
+                        deno_pp = deno.clone()/imax
+                deno_pp = deno_pp.clamp(0.,1.)*imax
 
         # -- unpack if exists --
         if hasattr(model,'mem_res'):
@@ -218,6 +228,9 @@ def run(cfg):
         ssims = compute_ssims(clean,deno,div=imax)
         strred = compute_strred(clean,deno,div=imax)
         # print(np.mean(psnrs),np.mean(ssims),np.mean(strred))
+        psnrs_pp = compute_psnrs(clean,deno_pp,div=imax)
+        ssims_pp = compute_ssims(clean,deno_pp,div=imax)
+        strred_pp = compute_strred(clean,deno_pp,div=imax)
 
         # -- compare [delete me] --
         # warps = model.warps
@@ -246,6 +259,9 @@ def run(cfg):
         results.psnrs.append(psnrs)
         results.ssims.append(ssims)
         results.strred.append(strred)
+        results.psnrs_pp.append(psnrs_pp)
+        results.ssims_pp.append(ssims_pp)
+        results.strred_pp.append(strred_pp)
         results.noisy_psnrs.append(noisy_psnrs)
         results.deno_fns.append(deno_fns)
         results.vid_frames.append(vid_frames)
