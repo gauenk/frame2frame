@@ -174,7 +174,7 @@ class LitModel(pl.LightningModule):
             scheduler = {"scheduler": scheduler, "interval": "epoch", "frequency": 1}
         elif self.scheduler_name in ["step","steplr"]:
             args = (self.step_lr_size,self.step_lr_gamma)
-            print("[Scheduler]: StepLR(%d,%2.2f)" % args)
+            # print("[Scheduler]: StepLR(%d,%2.2f)" % args)
             StepLR = th.optim.lr_scheduler.StepLR
             scheduler = StepLR(optim,step_size=self.step_lr_size,
                                gamma=self.step_lr_gamma)
@@ -242,8 +242,6 @@ class LitModel(pl.LightningModule):
         # -- terminal log --
         val_psnr = np.mean(compute_psnrs(denos,cleans,div=1.)).item()
         # val_ssim = np.mean(compute_ssims(denos,cleans,div=1.)).item() # too slow.
-
-        # self.gen_loger.info("train_psnr: %2.2f" % val_psnr)
         self.log("train_loss", loss.item(), on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
         self.log("train_psnr", val_psnr, on_step=True,
@@ -255,12 +253,7 @@ class LitModel(pl.LightningModule):
                  on_epoch=False, batch_size=self.batch_size)
         # self.log("train_ssim", val_ssim, on_step=True,
         #          on_epoch=False, batch_size=self.batch_size)
-
-        # # -- terminal log --
-        # val_psnr = np.mean(compute_psnrs(denos,cleans,div=1.)).item()
         self.gen_loger.info("train_psnr: %2.2f" % val_psnr)
-        # # self.log("train_loss", loss.item(), on_step=True,
-        # #          on_epoch=False, batch_size=self.batch_size)
 
         return loss
 
@@ -339,17 +332,17 @@ class LitModel(pl.LightningModule):
             self.nb2nb = nb2nb
             self.stnls_f2f = stnls_f2f
             return None
-        elif self.crit_name == "sup":
-            def sup(clean,noisy):
+        elif self.crit_name in ["sup","n2n"]:
+            def sup(clean,deno):
                 if self.dist_crit == "l1":
-                    return th.mean(th.abs(clean - noisy))
+                    return th.mean(th.abs(clean - deno))
                 elif self.dist_crit == "l2":
-                    return th.mean((clean - noisy)**2)
+                    return th.mean((clean - deno)**2)
                 else:
                     raise ValueError(f"Uknown dist_crit [{dist_crit}]")
             return sup
-        else:
-            raise ValueError("Uknown loss name [{self.crit_name}]")
+       else:
+            raise ValueError(f"Uknown loss name [{self.crit_name}]")
 
     def validation_step(self, batch, batch_idx):
 
