@@ -160,7 +160,6 @@ class LitModel(pl.LightningModule):
         else:
             raise ValueError(f"Unknown optim [{self.optim_name}]")
         sched = self.configure_scheduler(optim)
-        print(sched)
         return [optim], [sched]
 
     # def lr_scheduler_step(self, scheduler, metric, idk):

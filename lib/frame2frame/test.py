@@ -46,9 +46,28 @@ def test_pairs():
              "crit_name":"warp"}
     return pairs
 
-def run_ub2_test(model,noisy,flows):
+def run_ub2_test(model,noisy,flows,cfg):
+
+    # -- OVERWRIITING FOR EXPEDIENT TESTING; JUST REM TO DELETE ME --
+    cfg.temporal_chunk_size = 1
+    cfg.spatial_chunk_size = 512
+    cfg.spatial_chunk_overlap = 0.1
+    # print("WARNING!!! Please remove the temporal_chunk_size = 1 after this test.")
+
+    # -- chunked processing --
+    chunk_cfg = net_chunks.extract_chunks_config(cfg)
     b2u = B2ULoss(-1,-1,-1,-1,"")
-    deno = b2u.test(model,noisy)
+    def b2u_fwd(noisy,flows=None):
+        return b2u.test(model,noisy)
+    fwd_fxn = net_chunks.chunk(chunk_cfg,b2u_fwd)
+    deno = fwd_fxn(noisy,flows)
+
+    # T = noisy.shape[1]
+    # deno = []
+    # for t in range(T):
+    #     deno_t = b2u.test(model,noisy[:,[t]])
+    #     deno.append(deno_t)
+    # deno = th.cat(deno,1)
     return deno
 
 @econfig.set_init
@@ -204,7 +223,7 @@ def run(cfg):
             with TimeIt(timer,"deno_pp"):
                 with th.no_grad():
                     if tcfg.crit_name == "b2u":
-                        deno_pp = run_ub2_test(fwd_fxn,noisy_input/imax,flows)
+                        deno_pp = run_ub2_test(model,noisy_input/imax,flows,cfg)
                     else:
                         deno_pp = deno.clone()/imax
                 deno_pp = deno_pp.clamp(0.,1.)*imax
