@@ -64,7 +64,7 @@ class DnlsLoss(nn.Module):
     def __init__(self,ws, wt, ps, ps_dists, k, stride0, dist_crit="l1",
                  search_input="noisy", alpha = 0.5, nepochs=-1, k_decay=1.,
                  ps_dist_sched="None",ws_sched="None",epoch_ratio=1.,
-                 center_crop=0.):
+                 center_crop=0.,sigma=30.):
         super().__init__()
 
         # -- search info --
@@ -86,7 +86,9 @@ class DnlsLoss(nn.Module):
         self.center_crop = center_crop
         self.curr_k = k
         self.epoch_ratio = epoch_ratio
+        self.sigma = sigma
         self.setup_ws_sched()
+        self.name = "stnls"
 
     def setup_ws_sched(self):
         ws = self.ws
@@ -131,13 +133,13 @@ class DnlsLoss(nn.Module):
         search = stnls.search.NonLocalSearch(ws,self.wt,self.ps,k,
                                              nheads=1,dist_type="l2",
                                              stride0=self.stride0,
-                                             anchor_self=True)
+                                             use_adj=False,anchor_self=True)
         wr,kr = 1,1.
         # todo: try not sorting; e.g. k == -1
         ps = self.ps_dists if self.ps_dists >= 0 else self.ps
         refine = stnls.search.RefineSearch(self.ws,ps,-1,wr,kr,nheads=1,
                                            dist_type="l2",stride0=self.stride0,
-                                           anchor_self=True)
+                                           use_adj=False,anchor_self=True)
         # refine = stnls.search.QuadrefSearch(self.ws,self.ps,self.k,wr,kr,nheads=1,
         #                                     dist_type="l2",stride0=self.stride0,
         #                                     anchor_self=True)
@@ -183,10 +185,10 @@ class DnlsLoss(nn.Module):
             # print("dists_k.shape: ",dists_k.shape)
             loss = th.mean(dists_k * dists)
             return loss
-        elif self.dist_crit == "l2_v3":
+        elif self.dist_crit == "l2_v3": 
+            # silly b/c sampling dist of sigma^2 has too much variance when n = 50
             dists,_ = refine(deno,noisy,inds)
-            sigma = 30./255
-            loss = th.mean((dists-sigma**2)**2)
+            loss = th.mean((dists-(self.sigma/255.)**2)**2)
             return loss
         elif self.dist_crit == "l2_v4":
             loss = compute_patch_k4_loss(noisy,deno,inds,self.ps)
@@ -266,6 +268,12 @@ class DnlsLoss(nn.Module):
             # loss0 = th.mean(dists[...,1:])
             loss1 = mse_with_biases(noisy,deno,inds,ps_dists)
             loss = loss0 + Lambda * loss1
+            return loss
+        elif self.dist_crit == "l2_v16":
+            _,inds = remove_self(dists,inds,inds.shape[-2])
+            _,inds = refine(deno,deno,inds) # update order
+            dists,_ = refine(deno,noisy,inds) # update order
+            loss = th.mean(dists[...,1:])
             return loss
         else:
             raise ValueError(f"Uknown criterion [{self.dist_crit}]")
@@ -371,11 +379,8 @@ def remove_self(dists,inds,K):
 def mse_with_biases(noisy,deno,inds,ps):
 
     # -- unpack patches --
-    # dists =th.zeros_like(inds[...,0])*1.
-    # _,inds = stnls.nn.remove_same_frame(dists,inds)
-    # print("inds.shape: ",inds.shape)
-    inds = inds[:,0]
 
+    inds = inds[:,0]
     unfold = stnls.UnfoldK(ps)
 
     patches0 = unfold(deno,inds)

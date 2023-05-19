@@ -19,6 +19,7 @@ class Nb2NbLoss():
         self.lambda2 = lambda2
         self.nepochs = nepochs
         self.epoch_ratio = epoch_ratio
+        self.name = "nb2nb"
 
     def compute(self,model,noisy,epoch):
 

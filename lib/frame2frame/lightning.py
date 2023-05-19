@@ -42,6 +42,7 @@ from .warped_loss import WarpedLoss
 from .stnls_loss import DnlsLoss
 from .nb2nb_loss import Nb2NbLoss
 from .b2u_loss import B2ULoss
+from .combo_loss import ComboLoss
 
 # -- noise sims --
 import importlib
@@ -87,7 +88,8 @@ def lit_pairs():
              "stnls_ws_sched":"None","stnls_center_crop":0.,
              "optim_name":"adam","sgd_momentum":0.1,"sgd_dampening":0.1,
              "coswr_T0":-1,"coswr_Tmult":1,"coswr_eta_min":1e-9,
-             "step_lr_multisteps":"30-50"}
+             "step_lr_multisteps":"30-50","combo_swap_epochs":50,
+             "stnls_nb2nb_alpha":0.}
     return pairs
 
 def sim_pairs():
@@ -299,8 +301,10 @@ class LitModel(pl.LightningModule):
             loss = self.crit(clean,deno)
         elif self.crit_name == "n2n":
             deno = self.forward(noisy)
-            noisy2 = self.noise_sim(clean)
+            noisy2 = self.noise_sim(clean*255)/255.
             loss = self.crit(noisy2,deno)
+        elif self.crit_name == "stnls_nb2nb":
+            deno,loss = self.crit(self.net,noisy,flows,self.current_epoch)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
         return deno,loss
@@ -316,6 +320,15 @@ class LitModel(pl.LightningModule):
         elif self.crit_name == "nb2nb":
             return Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
                              self.nepochs,self.nb2nb_epoch_ratio)
+        elif self.crit_name == "stnls_nb2nb":
+            loss0 = Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
+                             self.nepochs,self.nb2nb_epoch_ratio)
+            loss1 = DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,self.k,self.stride0,
+                             self.dist_crit,self.search_input,self.alpha,
+                             self.nepochs,self.stnls_k_decay,self.stnls_ps_dist_sched,
+                             self.stnls_ws_sched,1.,self.stnls_center_crop,self.sigma)
+            return ComboLoss(loss0,loss1,swap=self.combo_swap_epochs,
+                             alpha=self.stnls_nb2nb_alpha)
         elif self.crit_name == "b2u":
             ninfo = "%s_%d_%d" % (self.ntype,self.sigma,self.rate)
             return B2ULoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
@@ -327,7 +340,7 @@ class LitModel(pl.LightningModule):
                                  self.k,self.stride0,self.dist_crit,
                                  self.search_input,self.alpha,self.nepochs,
                                  self.stnls_k_decay,self.stnls_ps_dist_sched,
-                                 self.stnls_ws_sched,1.,self.stnls_center_crop)
+                                 self.stnls_ws_sched,1.,self.stnls_center_crop,self.sigma)
             self.nb2nb = nb2nb
             self.stnls_f2f = stnls_f2f
             return None
@@ -340,7 +353,7 @@ class LitModel(pl.LightningModule):
                 else:
                     raise ValueError(f"Uknown dist_crit [{dist_crit}]")
             return sup
-       else:
+        else:
             raise ValueError(f"Uknown loss name [{self.crit_name}]")
 
     def validation_step(self, batch, batch_idx):
