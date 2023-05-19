@@ -80,8 +80,8 @@ def lit_pairs():
              "scheduler_name":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"ps_dists":7,"k":5,"stride0":4,"dist_crit":"l2",
-             "search_input":"deno","alpha":0.5,"crit_name":"warped",
-             "read_flows":False,"sigma":-1,"ntype":"g","rate":-1,
+             "search_input":"deno","alpha":0.5,"crit_name":"warped","read_flows":False,
+             "ntype":"g","rate":-1,"sigma":-1,"sigma_min":-1,"sigma_max":-1,
              "nb2nb_epoch_ratio":2.0,"nb2nb_lambda1":1.,"nb2nb_lambda2":1.,
              "stnls_k_decay":-1,"stnls_ps_dist_sched":"None",
              "stnls_ws_sched":"None","stnls_center_crop":0.,
@@ -265,7 +265,8 @@ class LitModel(pl.LightningModule):
 
         # -- if read flow --
         if self.read_flows:
-            flows = edict({"fflow":batch['fflow'],"bflow":batch["bflow"]})
+            flows = edict({"fflow":batch['fflow'][start:stop],
+                           "bflow":batch["bflow"][start:stop]})
         elif self.flow:
             flows = flow.orun(noisy,self.flow,ftype=self.flow_method)
         else:
@@ -300,7 +301,12 @@ class LitModel(pl.LightningModule):
             loss = self.crit(clean,deno)
         elif self.crit_name == "n2n":
             deno = self.forward(noisy)
-            noisy2 = self.noise_sim(clean)
+            if self.ntype in ["pg","g"]:
+                noisy2 = self.noise_sim(clean)
+            elif self.ntype == "msg":
+                noisy2 = self.noise_sim(clean,self.noise_sim.sigma)
+            else:
+                raise ValueError("")
             loss = self.crit(noisy2,deno)
         else:
             raise ValueError("Uknown loss name [{self.crit_name}]")
@@ -341,7 +347,7 @@ class LitModel(pl.LightningModule):
                 else:
                     raise ValueError(f"Uknown dist_crit [{dist_crit}]")
             return sup
-       else:
+        else:
             raise ValueError(f"Uknown loss name [{self.crit_name}]")
 
     def validation_step(self, batch, batch_idx):

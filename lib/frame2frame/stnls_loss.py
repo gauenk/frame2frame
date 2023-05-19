@@ -135,7 +135,7 @@ class DnlsLoss(nn.Module):
         wr,kr = 1,1.
         # todo: try not sorting; e.g. k == -1
         ps = self.ps_dists if self.ps_dists >= 0 else self.ps
-        refine = stnls.search.RefineSearch(self.ws,ps,-1,wr,kr,nheads=1,
+        refine = stnls.search.RefineSearch(ws,ps,-1,wr,kr,nheads=1,
                                            dist_type="l2",stride0=self.stride0,
                                            anchor_self=True)
         # refine = stnls.search.QuadrefSearch(self.ws,self.ps,self.k,wr,kr,nheads=1,
@@ -385,19 +385,14 @@ def mse_with_biases(noisy,deno,inds,ps):
     patches0 = rearrange(patches0,shape_str,HD=1)
     patches1 = rearrange(patches1,shape_str,HD=1)
 
-    # -- compute loss --
+    # -- compute loss with correct grad --
     delta0 = patches0[:1] - patches1[1:]
     delta1 = patches0[:1].detach() - patches0[1:].detach()
-    delta = delta0 - delta1
-    loss = th.mean(delta**2)
-    # loss = th.mean(delta0[0]**2) + th.mean(delta**2)
+    delta = (delta0 - delta1)**2
 
-    # delta = patches0[1:] - patches1[1:]
-    # delta0 = patches0[:1] - patches0[1:]
-    # # delta1 = patches0[:1].detach() - patches1[:1].detach()
-    # # # delta = patches0[1:] - patches1[1:]
-    # # delta = delta0 - delta1
-    # loss = th.mean(delta0**2)
+    # -- weights across k --
+    weights = softmax(-th.mean(delta1,-1,keepdim=True))
+    loss = th.mean(weights*delta)
 
     return loss
 
