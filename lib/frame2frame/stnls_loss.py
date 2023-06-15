@@ -58,6 +58,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 # -- import stnls --
 import stnls
+from torch.nn.functional import softmax
 
 class DnlsLoss(nn.Module):
 
@@ -396,7 +397,9 @@ def mse_with_biases(noisy,deno,inds,ps):
     delta = (delta0 - delta1)**2
 
     # -- weights across k --
-    weights = softmax(-th.mean(delta1,-1,keepdim=True))
+    weights = softmax(-th.mean(delta1**2,-1,keepdim=True),0)
+    # weights = softmax(-10*th.mean(delta1**2,-1,keepdim=True),0)
+    print(weights.shape)
     loss = th.mean(weights*delta)
 
     return loss
