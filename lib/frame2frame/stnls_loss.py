@@ -54,7 +54,6 @@ import pytorch_lightning as pl
 from pytorch_lightning import Callback
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.utilities.distributed import rank_zero_only
 
 # -- import stnls --
 import stnls
@@ -89,6 +88,7 @@ class DnlsLoss(nn.Module):
         self.sigma = sigma
         self.setup_ws_sched()
         self.name = "stnls"
+        print("TODO: Center images around 0, not 0.5."+"\n"*10)
 
     def setup_ws_sched(self):
         ws = self.ws

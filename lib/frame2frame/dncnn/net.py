@@ -31,6 +31,7 @@ class DnCNN(nn.Module):
 
         # -- batch to vid --
         if T != -1:
+            out = rearrange(out,'(b t) c h w -> b t c h w',t=T)
             x = rearrange(x,'(b t) c h w -> b t c h w',t=T)
 
         return x-out

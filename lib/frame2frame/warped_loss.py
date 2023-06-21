@@ -58,7 +58,7 @@ import pytorch_lightning as pl
 from pytorch_lightning import Callback
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 class WarpedLoss(nn.Module):
     def __init__(self,dist_crit="l2"):
