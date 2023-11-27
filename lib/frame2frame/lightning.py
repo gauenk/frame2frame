@@ -43,6 +43,7 @@ from .stnls_loss import DnlsLoss
 from .nb2nb_loss import Nb2NbLoss
 from .b2u_loss import B2ULoss
 from .combo_loss import ComboLoss
+# from .align_xform_loss import AlignXformLoss
 
 # -- noise sims --
 import importlib
@@ -77,7 +78,7 @@ def lit_pairs():
     pairs = {"batch_size":1,"flow":True,"flow_method":"cv2",
              "isize":None,"bw":False,"lr_init":1e-3,
              "lr_final":1e-8,"weight_decay":0.,
-             "nepochs":0,"task":"denoising","uuid":"",
+             "nsteps":0,"nepochs":0,"task":"denoising","uuid":"",
              "scheduler_name":"default","step_lr_size":5,
              "step_lr_gamma":0.1,"flow_epoch":None,"flow_from_end":None,
              "ws":9,"wt":3,"ps":7,"ps_dists":7,"k":5,"stride0":4,"dist_crit":"l2",
@@ -89,7 +90,8 @@ def lit_pairs():
              "optim_name":"adam","sgd_momentum":0.1,"sgd_dampening":0.1,
              "coswr_T0":-1,"coswr_Tmult":1,"coswr_eta_min":1e-9,
              "step_lr_multisteps":"30-50","combo_swap_epochs":50,
-             "stnls_nb2nb_alpha":0.}
+             "stnls_nb2nb_alpha":0.,"stnls_normalize_bwd":False,"dd_in":3,
+             "dist_mask":-1,"limit_train_batches":-1,}
     return pairs
 
 def sim_pairs():
@@ -124,12 +126,26 @@ class LitModel(pl.LightningModule):
         self.noise_sim = choose_noise(lit_cfg)
         self.dset_length = 0
 
+    def ensure_chnls(self,noisy,batch):
+        if noisy.shape[-3] == self.dd_in:
+            return noisy
+        elif noisy.shape[-3] == 4 and self.dd_in == 3:
+            return noisy[...,:3,:,:].contiguous()
+        sigmas = []
+        B,t,c,h,w = noisy.shape
+        for b in range(B):
+            sigma_b = batch['sigma'][b]/255.
+            noise_b = th.ones(t,1,h,w,device=sigma_b.device) * sigma_b
+            sigmas.append(noise_b)
+        sigmas = th.stack(sigmas)
+        return th.cat([noisy,sigmas],2)
+
     def forward(self,vid):
         # flows = flow.orun(vid,self.flow,ftype=self.flow_method)
-        B = vid.shape[0]
-        batch = rearrange(vid,'b t c h w -> (b t) c h w')
-        deno = self.net(batch)#,flows=flows)
-        deno = rearrange(deno,'(b t) c h w -> b t c h w',b=B)
+        # B = vid.shape[0]
+        # batch = rearrange(vid,'b t c h w -> (b t) c h w')
+        deno = self.net(vid)#,flows=flows)
+        # deno = rearrange(deno,'(b t) c h w -> b t c h w',b=B)
         return deno
 
     def sample_noisy(self,batch):
@@ -179,10 +195,16 @@ class LitModel(pl.LightningModule):
             StepLR = th.optim.lr_scheduler.StepLR
             scheduler = StepLR(optim,step_size=self.step_lr_size,
                                gamma=self.step_lr_gamma)
-        elif self.scheduler_name in ["cosa"]:
+        elif self.scheduler_name in ["cosa"] and (self.nepochs > 0):
             CosAnnLR = th.optim.lr_scheduler.CosineAnnealingLR
             scheduler = CosAnnLR(optim,self.nepochs)
             scheduler = {"scheduler": scheduler, "interval": "epoch", "frequency": 1}
+        elif self.scheduler_name in ["cosa_step"] and (self.nsteps > 0):
+            nsteps = self.num_steps()
+            print("[CosAnnLR] nsteps: ",nsteps)
+            CosAnnLR = th.optim.lr_scheduler.CosineAnnealingLR
+            scheduler = CosAnnLR(optim,T_max=nsteps,eta_min=self.lr_final)
+            scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
         elif self.scheduler_name in ["multi_step"]:
             milestones = [int(x) for x in self.step_lr_multisteps.split("-")]
             MultiStepLR = th.optim.lr_scheduler.MultiStepLR
@@ -209,20 +231,21 @@ class LitModel(pl.LightningModule):
         # -- sample noise from simulator --
         self.sample_noisy(batch)
 
-
         # -- each sample in batch --
-        loss = 0 # init @ zero
+        loss,sim = 0,0 # init @ zero
         denos,cleans = [],[]
         ntotal = len(batch['noisy'])
         nbatch = ntotal
         nbatches = (ntotal-1)//nbatch+1
         for i in range(nbatches):
             start,stop = i*nbatch,min((i+1)*nbatch,ntotal)
-            deno_i,clean_i,loss_i = self.training_step_i(batch, start, stop)
+            deno_i,clean_i,loss_i,sim_i = self.training_step_i(batch, start, stop)
             loss += loss_i
+            sim += sim_i
             denos.append(deno_i)
             cleans.append(clean_i)
         loss = loss / nbatches
+        sim = sim / nbatches
 
         # -- view params --
         # loss.backward()
@@ -241,15 +264,21 @@ class LitModel(pl.LightningModule):
                  on_epoch=False,batch_size=self.batch_size)
 
         # -- terminal log --
+        if "fdvd" in self.crit_name:
+            cleans = cleans[:,cleans.shape[1]//2]
         val_psnr = np.mean(compute_psnrs(denos,cleans,div=1.)).item()
         # val_ssim = np.mean(compute_ssims(denos,cleans,div=1.)).item() # too slow.
         self.log("train_loss", loss.item(), on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
         self.log("train_psnr", val_psnr, on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
-        lr = self.optimizers().param_groups[-1]['lr']
+        lr = self.optimizers()._optimizer.param_groups[0]['lr']
+        # lr = self.optimizers().param_groups[-1]['lr']
         self.log("lr", lr, on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
+        # for i in range(1,len(sim)):
+        #     self.log("sim_%d"%i, sim[i], on_step=True,
+        #              on_epoch=False, batch_size=self.batch_size)
         self.log("global_step", self.global_step, on_step=True,
                  on_epoch=False, batch_size=self.batch_size)
         # self.log("train_ssim", val_ssim, on_step=True,
@@ -263,30 +292,48 @@ class LitModel(pl.LightningModule):
         # -- unpack batch
         noisy = batch['noisy'][start:stop]/255.
         clean = batch['clean'][start:stop]/255.
+        noisy = self.ensure_chnls(noisy,batch)
+        noisy = noisy[:,:,:self.dd_in]
 
         # -- if read flow --
         if self.read_flows:
             flows = edict({"fflow":batch['fflow'][start:stop],
                            "bflow":batch["bflow"][start:stop]})
-        elif self.flow:
-            flows = flow.orun(noisy,self.flow,ftype=self.flow_method)
         else:
-            raise ValueError("Must get flow. Either flow or read_flows must be true.")
+            flows = flow.orun(noisy,self.flow,ftype=self.flow_method)
 
+        # noisy = clean + th.randn_like(clean)*(50/255.)
         # # -- foward --
         # deno = self.forward(noisy)
 
-        # -- compute fwd/loss --
-        deno,loss = self.compute_loss(self.net,clean,noisy,flows)
-        return deno.detach(),clean,loss
+        # -- non-local sim --
+        sim = -1
+        # if self.crit_name == "stnls":
+        #     import stnls
+        #     search = stnls.search.NonLocalSearch(self.ws,self.wt,self.ps,self.k,
+        #                                          nheads=1,dist_type="l2",
+        #                                          stride0=self.stride0,
+        #                                          use_adj=False,anchor_self=True)
+        #     with th.no_grad():
+        #         dists = search(clean,clean,flows.fflow,flows.bflow)[0]
+        #         dists = dists.reshape(-1,self.k)
+        #         sim = th.quantile(dists,0.25,0).cpu().numpy()
 
-    def compute_loss(self,model,clean,noisy,flows):
+        # -- compute fwd/loss --
+        # deno = self.forward(noisy)#,flows=flows)
+        # # deno = self.forward(noisy)
+        # loss = th.mean((deno[:,1:] - noisy[:,:-1])**2)
+        # loss = th.mean((deno[:,:-1] - noisy[:,1:])**2)
+        deno,loss = self.compute_loss(clean,noisy,flows)
+        return deno.detach(),clean,loss,sim
+
+    def compute_loss(self,clean,noisy,flows):
         if self.crit_name == "warped":
             deno = self.forward(noisy)
             loss = self.crit.run_pairs(deno,noisy,flows)
         elif self.crit_name == "stnls":
             deno = self.forward(noisy)
-            loss = self.crit(noisy,deno,flows,self.current_epoch)
+            loss = self.crit(noisy,clean,deno,flows,self.global_step)
         elif self.crit_name == "nb2nb":
             deno,loss = self.crit.compute(self.net,noisy,self.current_epoch)
         elif self.crit_name == "b2u":
@@ -299,6 +346,13 @@ class LitModel(pl.LightningModule):
             loss = 0.5*(loss0 + loss1)
         elif self.crit_name == "sup":
             deno = self.forward(noisy)
+            return deno,th.mean((deno-clean)**2)
+            loss = self.crit(clean,deno)
+        elif self.crit_name == "sup_fdvd":
+            T = noisy.shape[1]
+            deno = self.forward(noisy)
+            clean = clean[:,T//2]
+            return deno,th.mean((deno-clean)**2)
             loss = self.crit(clean,deno)
         elif self.crit_name == "n2n":
             deno = self.forward(noisy)
@@ -323,17 +377,20 @@ class LitModel(pl.LightningModule):
             return DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,self.k,self.stride0,
                             self.dist_crit,self.search_input,self.alpha,
                             self.nepochs,self.stnls_k_decay,self.stnls_ps_dist_sched,
-                            self.stnls_ws_sched,1.,self.stnls_center_crop)
+                            self.stnls_ws_sched,1.,self.dist_mask,self.stnls_center_crop,
+                            nmz_bwd=self.stnls_normalize_bwd)
         elif self.crit_name == "nb2nb":
+            nepochs = self.num_epochs()
             return Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
-                             self.nepochs,self.nb2nb_epoch_ratio)
+                             nepochs,self.nb2nb_epoch_ratio)
         elif self.crit_name == "stnls_nb2nb":
             loss0 = Nb2NbLoss(self.nb2nb_lambda1,self.nb2nb_lambda2,
                              self.nepochs,self.nb2nb_epoch_ratio)
             loss1 = DnlsLoss(self.ws,self.wt,self.ps,self.ps_dists,self.k,self.stride0,
                              self.dist_crit,self.search_input,self.alpha,
                              self.nepochs,self.stnls_k_decay,self.stnls_ps_dist_sched,
-                             self.stnls_ws_sched,1.,self.stnls_center_crop,self.sigma)
+                             self.stnls_ws_sched,1.,self.dist_mask,self.stnls_center_crop,
+                             self.sigma,nmz_bwd=self.stnls_normalize_bwd)
             return ComboLoss(loss0,loss1,swap=self.combo_swap_epochs,
                              alpha=self.stnls_nb2nb_alpha)
         elif self.crit_name == "b2u":
@@ -347,21 +404,38 @@ class LitModel(pl.LightningModule):
                                  self.k,self.stride0,self.dist_crit,
                                  self.search_input,self.alpha,self.nepochs,
                                  self.stnls_k_decay,self.stnls_ps_dist_sched,
-                                 self.stnls_ws_sched,1.,self.stnls_center_crop,self.sigma)
+                                 self.stnls_ws_sched,1.,self.stnls_center_crop,
+                                 self.sigma,nmz_bwd=self.stnls_normalize_bwd)
             self.nb2nb = nb2nb
             self.stnls_f2f = stnls_f2f
             return None
-        elif self.crit_name in ["sup","n2n"]:
+        elif self.crit_name in ["sup","n2n","sup_fdvd"]:
             def sup(clean,deno):
                 if self.dist_crit == "l1":
                     return th.mean(th.abs(clean - deno))
-                elif self.dist_crit == "l2":
+                elif "l2" in self.dist_crit:
                     return th.mean((clean - deno)**2)
                 else:
                     raise ValueError(f"Uknown dist_crit [{dist_crit}]")
             return sup
         else:
             raise ValueError(f"Uknown loss name [{self.crit_name}]")
+
+    def num_steps(self) -> int:
+        """Get number of steps"""
+        # Accessing _data_source is flaky and might break
+        if self.nsteps > 0:
+            return self.nsteps
+        elif self.limit_train_batches > 0:
+            dataset_size = self.limit_train_batches
+            num_devices = 1
+        else:
+            dataset = self.trainer.fit_loop._data_source.dataloader()
+            dataset_size = len(dataset)
+            num_devices = max(1, self.trainer.num_devices)
+        acc = self.trainer.accumulate_grad_batches
+        num_steps = dataset_size * self.trainer.max_epochs // (acc * num_devices)
+        return num_steps
 
     def validation_step(self, batch, batch_idx):
 
@@ -371,6 +445,7 @@ class LitModel(pl.LightningModule):
         # -- denoise --
         noisy,clean = batch['noisy']/255.,batch['clean']/255.
         val_index = batch['index'].cpu().item()
+        noisy = self.ensure_chnls(noisy,batch)
 
         # -- forward --
         gpu_mem.print_peak_gpu_stats(False,"val",reset=True)
@@ -410,6 +485,7 @@ class LitModel(pl.LightningModule):
         # -- denoise --
         index = float(batch['index'][0].item())
         noisy,clean = batch['noisy']/255.,batch['clean']/255.
+        noisy = self.ensure_chnls(noisy,batch)
 
         # -- forward --
         gpu_mem.print_peak_gpu_stats(False,"test",reset=True)
@@ -441,6 +517,39 @@ class LitModel(pl.LightningModule):
         results.test_mem_res = mem_res
         results.test_index = index#.cpu().numpy().item()
         return results
+
+    def num_steps(self) -> int:
+        """Get number of steps"""
+        # Accessing _data_source is flaky and might break
+        if self.nsteps > 0:
+            return self.nsteps
+        elif self.limit_train_batches > 0:
+            dataset_size = self.limit_train_batches
+            num_devices = 1
+        else:
+            dataset = self.trainer.fit_loop._data_source.dataloader()
+            dataset_size = len(dataset)
+            num_devices = max(1, self.trainer.num_devices)
+        acc = self.trainer.accumulate_grad_batches
+        num_steps = dataset_size * self.trainer.max_epochs // (acc * num_devices)
+        return num_steps
+
+    def num_epochs(self) -> int:
+        """Get number of epochs"""
+        if self.nepochs > 0:
+            return self.nepochs
+        elif self.limit_train_batches > 0:
+            dataset_size = self.limit_train_batches
+            num_devices = 1
+        else:
+            dataset = self.trainer.fit_loop._data_source.dataloader()
+            dataset_size = len(dataset)
+            num_devices = max(1, self.trainer.num_devices)
+        steps_per_epoch = dataset_size/num_devices
+        num_epochs = self.nsteps / steps_per_epoch
+        # num_steps = dataset_size * self.trainer.max_epochs // (acc * num_devices)
+        return num_epochs
+
 
 class MetricsCallback(Callback):
     """PyTorch Lightning metric callback."""

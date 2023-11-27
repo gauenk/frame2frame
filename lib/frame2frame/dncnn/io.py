@@ -42,7 +42,6 @@ def load_model(cfg):
     # -- end init --
     if econfig.is_init: return
 
-
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     #
     #     Construct Network Configs
@@ -68,7 +67,7 @@ def load_model(cfg):
 
 def arch_pairs():
     pairs ={"channels":3,
-            "num_of_layers":17}
+            "num_of_layers":17,}
     return pairs
 
 def io_pairs():
@@ -76,6 +75,7 @@ def io_pairs():
             "pretrained_root":"",
             "pretrained_type":"",
             "pretrained_load":False,
+            "net_name":"dncnn"
     }
     return pairs
 

@@ -24,14 +24,16 @@ class DnCNN(nn.Module):
         # -- vid to batch --
         T = -1
         if x.ndim == 5:
-            T = x.shape[1]
-            x = rearrange(x,'b t c h w -> (b t) c h w')
+            B,T,F,H,W = x.shape
+            x = x.reshape(B*T,F,H,W)
+            # x = rearrange(x,'b t c h w -> (b t) c h w')
 
-        out = self.dncnn(x)
+        out = x-self.dncnn(x)
 
         # -- batch to vid --
         if T != -1:
-            out = rearrange(out,'(b t) c h w -> b t c h w',t=T)
-            x = rearrange(x,'(b t) c h w -> b t c h w',t=T)
+            out = out.reshape(B,T,F,H,W)
+            # out = rearrange(out,'(b t) c h w -> b t c h w',t=T)
+            # x = rearrange(x,'(b t) c h w -> b t c h w',t=T)
 
-        return x-out
+        return out
